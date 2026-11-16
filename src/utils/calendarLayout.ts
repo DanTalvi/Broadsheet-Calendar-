@@ -1,4 +1,4 @@
-import { CalendarConfig, CalendarDayEvent } from '../types/calendar';
+import { CalendarConfig, CalendarDayEvent, CalendarSpanEvent } from '../types/calendar';
 import {
   formatDateKey,
   getDayOfWeek,
@@ -12,9 +12,11 @@ import {
   MONTH_NAMES_SHORT,
   WEEKDAY_NAMES_SHORT,
 } from './calendarMath';
+import { measureTextWidthPx, wrapTextToLines } from './textWrap';
 
 export interface ComputedCell {
   id: string;
+  stripId: string;
   x: number; // inches from sheet top-left (including bleed)
   y: number;
   w: number;
@@ -31,8 +33,27 @@ export interface ComputedCell {
   moonPhase: 'new' | 'full' | null;
   holiday: string | null;
   events: CalendarDayEvent[];
+  spanFillColor: string | null;
+  reservedTopIn: number;
+  hasVerticalSpan: boolean;
   styleVariant: 'matrix' | 'vertical' | 'block';
   showWeekdayInCell: boolean;
+}
+
+export interface ComputedSpanSegment {
+  id: string;
+  eventId: string;
+  title: string;
+  color: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  orientation: 'horizontal' | 'vertical';
+  fontSizeIn: number;
+  lines: string[];
+  lineHeightIn: number;
+  startDateKey: string;
 }
 
 export interface ComputedLabel {
@@ -86,6 +107,7 @@ export interface ComputedCalendarLayout {
   lines: ComputedLine[];
   labels: ComputedLabel[];
   cells: ComputedCell[];
+  spanSegments: ComputedSpanSegment[];
   cropMarks: ComputedLine[];
 }
 
@@ -162,6 +184,8 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
       ? { ...getUSHolidaysForYear(config.year), ...getUSHolidaysForYear(config.year + 1) }
       : getUSHolidaysForYear(config.year)
     : {};
+
+  const { singleDayMap, multiDayEvents } = partitionEvents(config);
 
   const rects: ComputedRect[] = [];
   const lines: ComputedLine[] = [];
@@ -335,16 +359,18 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
 
   // Build specific layout
   if (config.layout === 'aligned-matrix') {
-    buildAlignedMatrix(config, gridX, gridY, gridW, gridH, strokeWidthIn, holidays, rects, lines, labels, cells);
+    buildAlignedMatrix(config, gridX, gridY, gridW, gridH, strokeWidthIn, holidays, singleDayMap, rects, lines, labels, cells);
   } else if (config.layout === 'day-matrix') {
-    buildDayMatrix(config, gridX, gridY, gridW, gridH, strokeWidthIn, holidays, rects, lines, labels, cells);
+    buildDayMatrix(config, gridX, gridY, gridW, gridH, strokeWidthIn, holidays, singleDayMap, rects, lines, labels, cells);
   } else if (config.layout === 'vertical-columns') {
-    buildVerticalColumns(config, gridX, gridY, gridW, gridH, strokeWidthIn, holidays, rects, lines, labels, cells);
+    buildVerticalColumns(config, gridX, gridY, gridW, gridH, strokeWidthIn, holidays, singleDayMap, rects, lines, labels, cells);
   } else {
     const cols = config.layout === 'grid-6x2' ? 6 : config.layout === 'grid-3x4' ? 3 : 4;
     const rows = config.layout === 'grid-6x2' ? 2 : config.layout === 'grid-3x4' ? 4 : 3;
-    buildBlockGrid(config, cols, rows, gridX, gridY, gridW, gridH, strokeWidthIn, holidays, rects, lines, labels, cells);
+    buildBlockGrid(config, cols, rows, gridX, gridY, gridW, gridH, strokeWidthIn, holidays, singleDayMap, rects, lines, labels, cells);
   }
+
+  const spanSegments = computeSpanSegments(cells, multiDayEvents, config);
 
   // Footer
   if (config.showFooter) {
@@ -415,6 +441,7 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
     lines,
     labels,
     cells,
+    spanSegments,
     cropMarks,
   };
 }
@@ -427,6 +454,7 @@ function buildAlignedMatrix(
   gh: number,
   sw: number,
   holidays: Record<string, string>,
+  singleDayMap: Record<string, CalendarDayEvent[]>,
   rects: ComputedRect[],
   lines: ComputedLine[],
   labels: ComputedLabel[],
@@ -445,7 +473,9 @@ function buildAlignedMatrix(
     maxCol = Math.max(maxCol, offset + getDaysInMonth(slot.year, slot.monthIndex));
   }
 
-  const labelRatio = config.typography.monthCase === 'abbr-upper' ? 0.058 : 0.082;
+  const labelRatio = config.typography.monthCase === 'abbr-upper'
+    ? (config.schoolYear ? 0.068 : 0.058)
+    : (config.schoolYear ? 0.094 : 0.082);
   const labelW = clamp(gw * labelRatio * config.typography.monthScale, 1.1, gw * 0.16);
   const headerH = clamp(gh * 0.032, 0.32, 0.65);
   const bodyX = gx + labelW;
@@ -530,6 +560,7 @@ function buildAlignedMatrix(
         const dateKey = formatDateKey(y, m, dayNum);
         cells.push({
           id: `cell-${y}-${m}-${c}`,
+          stripId: `row-${i}`,
           x: cx,
           y: ry,
           w: colW,
@@ -545,13 +576,17 @@ function buildAlignedMatrix(
           dayOfYear: config.showDayOfYear ? getDayOfYear(y, m, dayNum) : null,
           moonPhase: config.showMoonPhases ? getMajorMoonPhase(y, m, dayNum) : null,
           holiday: holidays[dateKey] ?? null,
-          events: config.events[dateKey] ?? [],
+          events: singleDayMap[dateKey] ?? [],
+          spanFillColor: null,
+          reservedTopIn: 0,
+          hasVerticalSpan: false,
           styleVariant: 'matrix',
           showWeekdayInCell: false,
         });
       } else {
         cells.push({
           id: `empty-${y}-${m}-${c}`,
+          stripId: `row-${i}`,
           x: cx,
           y: ry,
           w: colW,
@@ -568,6 +603,9 @@ function buildAlignedMatrix(
           moonPhase: null,
           holiday: null,
           events: [],
+          spanFillColor: null,
+          reservedTopIn: 0,
+          hasVerticalSpan: false,
           styleVariant: 'matrix',
           showWeekdayInCell: false,
         });
@@ -615,12 +653,15 @@ function buildDayMatrix(
   gh: number,
   sw: number,
   holidays: Record<string, string>,
+  singleDayMap: Record<string, CalendarDayEvent[]>,
   rects: ComputedRect[],
   lines: ComputedLine[],
   labels: ComputedLabel[],
   cells: ComputedCell[]
 ) {
-  const labelRatio = config.typography.monthCase === 'abbr-upper' ? 0.058 : 0.082;
+  const labelRatio = config.typography.monthCase === 'abbr-upper'
+    ? (config.schoolYear ? 0.068 : 0.058)
+    : (config.schoolYear ? 0.094 : 0.082);
   const labelW = clamp(gw * labelRatio * config.typography.monthScale, 1.1, gw * 0.16);
   const headerH = clamp(gh * 0.032, 0.32, 0.65);
   const bodyX = gx + labelW;
@@ -684,6 +725,7 @@ function buildDayMatrix(
         }
         cells.push({
           id: `cell-${y}-${m}-${d}`,
+          stripId: `row-${i}`,
           x: cx,
           y: ry,
           w: colW,
@@ -699,7 +741,10 @@ function buildDayMatrix(
           dayOfYear: config.showDayOfYear ? getDayOfYear(y, m, d) : null,
           moonPhase: config.showMoonPhases ? getMajorMoonPhase(y, m, d) : null,
           holiday: holidays[dateKey] ?? null,
-          events: config.events[dateKey] ?? [],
+          events: singleDayMap[dateKey] ?? [],
+          spanFillColor: null,
+          reservedTopIn: 0,
+          hasVerticalSpan: false,
           styleVariant: 'matrix',
           showWeekdayInCell: true,
         });
@@ -707,6 +752,7 @@ function buildDayMatrix(
         rects.push({ x: cx, y: ry, w: colW, h: rowH, fill: config.palette.weekendBg });
         cells.push({
           id: `empty-${y}-${m}-${d}`,
+          stripId: `row-${i}`,
           x: cx,
           y: ry,
           w: colW,
@@ -723,6 +769,9 @@ function buildDayMatrix(
           moonPhase: null,
           holiday: null,
           events: [],
+          spanFillColor: null,
+          reservedTopIn: 0,
+          hasVerticalSpan: false,
           styleVariant: 'matrix',
           showWeekdayInCell: false,
         });
@@ -767,6 +816,7 @@ function buildVerticalColumns(
   gh: number,
   sw: number,
   holidays: Record<string, string>,
+  singleDayMap: Record<string, CalendarDayEvent[]>,
   rects: ComputedRect[],
   lines: ComputedLine[],
   labels: ComputedLabel[],
@@ -815,6 +865,7 @@ function buildVerticalColumns(
         }
         cells.push({
           id: `vcell-${y}-${m}-${d}`,
+          stripId: `vcol-${i}`,
           x: cx,
           y: ry,
           w: colW,
@@ -830,7 +881,10 @@ function buildVerticalColumns(
           dayOfYear: config.showDayOfYear ? getDayOfYear(y, m, d) : null,
           moonPhase: config.showMoonPhases ? getMajorMoonPhase(y, m, d) : null,
           holiday: holidays[dateKey] ?? null,
-          events: config.events[dateKey] ?? [],
+          events: singleDayMap[dateKey] ?? [],
+          spanFillColor: null,
+          reservedTopIn: 0,
+          hasVerticalSpan: false,
           styleVariant: 'vertical',
           showWeekdayInCell: true,
         });
@@ -838,6 +892,7 @@ function buildVerticalColumns(
         rects.push({ x: cx, y: ry, w: colW, h: rowH, fill: config.palette.weekendBg });
         cells.push({
           id: `vempty-${y}-${m}-${d}`,
+          stripId: `vcol-${i}`,
           x: cx,
           y: ry,
           w: colW,
@@ -854,6 +909,9 @@ function buildVerticalColumns(
           moonPhase: null,
           holiday: null,
           events: [],
+          spanFillColor: null,
+          reservedTopIn: 0,
+          hasVerticalSpan: false,
           styleVariant: 'vertical',
           showWeekdayInCell: false,
         });
@@ -899,6 +957,7 @@ function buildBlockGrid(
   gh: number,
   sw: number,
   holidays: Record<string, string>,
+  singleDayMap: Record<string, CalendarDayEvent[]>,
   rects: ComputedRect[],
   lines: ComputedLine[],
   labels: ComputedLabel[],
@@ -1031,6 +1090,7 @@ function buildBlockGrid(
           }
           cells.push({
             id: `bcell-${y}-${m}-${r}-${c}`,
+            stripId: `block-${i}-row-${r}`,
             x: cx,
             y: cy,
             w: dayW,
@@ -1046,13 +1106,17 @@ function buildBlockGrid(
             dayOfYear: config.showDayOfYear ? getDayOfYear(y, m, dayNum) : null,
             moonPhase: config.showMoonPhases ? getMajorMoonPhase(y, m, dayNum) : null,
             holiday: holidays[dateKey] ?? null,
-            events: config.events[dateKey] ?? [],
+            events: singleDayMap[dateKey] ?? [],
+            spanFillColor: null,
+            reservedTopIn: 0,
+            hasVerticalSpan: false,
             styleVariant: 'block',
             showWeekdayInCell: false,
           });
         } else {
           cells.push({
             id: `bempty-${y}-${m}-${r}-${c}`,
+            stripId: `block-${i}-row-${r}`,
             x: cx,
             y: cy,
             w: dayW,
@@ -1069,6 +1133,9 @@ function buildBlockGrid(
             moonPhase: null,
             holiday: null,
             events: [],
+            spanFillColor: null,
+            reservedTopIn: 0,
+            hasVerticalSpan: false,
             styleVariant: 'block',
             showWeekdayInCell: false,
           });
@@ -1105,3 +1172,240 @@ function buildBlockGrid(
     }
   }
 }
+
+function partitionEvents(config: CalendarConfig): {
+  singleDayMap: Record<string, CalendarDayEvent[]>;
+  multiDayEvents: CalendarSpanEvent[];
+} {
+  const singleDayMap: Record<string, CalendarDayEvent[]> = {};
+  const multiDayEvents: CalendarSpanEvent[] = [];
+
+  const sourceList: CalendarSpanEvent[] = [...(config.spanEvents ?? [])];
+
+  // Fallback for any legacy config.events
+  if (sourceList.length === 0 && config.events) {
+    for (const [dateKey, items] of Object.entries(config.events)) {
+      for (const item of items) {
+        sourceList.push({
+          id: item.id,
+          title: item.title,
+          startDate: dateKey,
+          endDate: dateKey,
+          color: item.color,
+          fillCell: item.fillCell,
+        });
+      }
+    }
+  }
+
+  for (const ev of sourceList) {
+    if (!ev.startDate || !ev.endDate || ev.endDate <= ev.startDate) {
+      const key = ev.startDate;
+      if (!key) continue;
+      if (!singleDayMap[key]) singleDayMap[key] = [];
+      singleDayMap[key].push({
+        id: ev.id,
+        title: ev.title,
+        color: ev.color,
+        fillCell: ev.fillCell,
+      });
+    } else {
+      multiDayEvents.push(ev);
+    }
+  }
+
+  return { singleDayMap, multiDayEvents };
+}
+
+function computeSpanSegments(
+  cells: ComputedCell[],
+  multiDayEvents: CalendarSpanEvent[],
+  config: CalendarConfig
+): ComputedSpanSegment[] {
+  if (multiDayEvents.length === 0) return [];
+
+  const segments: ComputedSpanSegment[] = [];
+  const strips = new Map<string, ComputedCell[]>();
+  for (const cell of cells) {
+    if (cell.isEmpty || !cell.dateKey) continue;
+    const list = strips.get(cell.stripId);
+    if (list) list.push(cell);
+    else strips.set(cell.stripId, [cell]);
+  }
+
+  const bodyFamily = `${config.typography.bodyFont.replace(/"/g, '')}, sans-serif`;
+  const pt = 72;
+
+  for (const [stripId, stripCells] of strips.entries()) {
+    if (stripCells.length === 0) continue;
+    const isVertical = stripCells[0].styleVariant === 'vertical';
+
+    // Find overlapping multi-day events in this strip
+    interface Interval {
+      ev: CalendarSpanEvent;
+      startIdx: number;
+      endIdx: number;
+      lane: number;
+    }
+
+    const intervals: Interval[] = [];
+    for (const ev of multiDayEvents) {
+      let runStart = -1;
+      for (let i = 0; i < stripCells.length; i++) {
+        const dk = stripCells[i].dateKey!;
+        const inside = dk >= ev.startDate && dk <= ev.endDate;
+        if (inside) {
+          if (ev.fillCell) {
+            stripCells[i].spanFillColor = ev.color;
+          }
+          if (runStart === -1) runStart = i;
+        } else if (runStart !== -1) {
+          intervals.push({ ev, startIdx: runStart, endIdx: i - 1, lane: 0 });
+          runStart = -1;
+        }
+      }
+      if (runStart !== -1) {
+        intervals.push({ ev, startIdx: runStart, endIdx: stripCells.length - 1, lane: 0 });
+      }
+    }
+
+    if (intervals.length === 0) continue;
+
+    // Sort earliest first, longest span first, and pack into non-overlapping lanes
+    intervals.sort((a, b) => a.startIdx - b.startIdx || (b.endIdx - b.startIdx) - (a.endIdx - a.startIdx));
+    const laneEnds: number[] = [];
+    for (const item of intervals) {
+      let assigned = -1;
+      for (let l = 0; l < laneEnds.length; l++) {
+        if (item.startIdx > laneEnds[l]) {
+          assigned = l;
+          laneEnds[l] = item.endIdx;
+          break;
+        }
+      }
+      if (assigned === -1) {
+        assigned = laneEnds.length;
+        laneEnds.push(item.endIdx);
+      }
+      item.lane = assigned;
+    }
+
+    if (isVertical) {
+      const totalLanes = Math.max(1, laneEnds.length);
+      for (const item of intervals) {
+        const firstCell = stripCells[item.startIdx];
+        const lastCell = stripCells[item.endIdx];
+        const padX = Math.min(firstCell.w * 0.09, 0.1);
+        const padY = Math.min(firstCell.h * 0.08, 0.09);
+        const fontSize = Math.min(firstCell.h * 0.44, firstCell.w * 0.11) * config.typography.dayNumberScale;
+        const metaStartX = firstCell.x + padX + fontSize * 3.85;
+        const availTotalW = Math.max(0.25, firstCell.x + firstCell.w - padX - metaStartX);
+        const laneW = availTotalW / totalLanes;
+        const segX = metaStartX + item.lane * laneW;
+        const segY = firstCell.y + padY * 0.45;
+        const segH = lastCell.y + lastCell.h - padY * 0.45 - segY;
+
+        for (let k = item.startIdx; k <= item.endIdx; k++) {
+          stripCells[k].hasVerticalSpan = true;
+        }
+
+        const barW = Math.max(0.025, 2 / pt);
+        const textFontSize = Math.min(fontSize * 0.78, firstCell.h * 0.42);
+        const lineHeightIn = textFontSize * 1.25;
+        const maxLines = Math.max(1, Math.floor((segH - padY) / lineHeightIn));
+        const textAvailPt = Math.max(12, (laneW - barW - padX * 0.75) * pt);
+        const fontSpec = `600 ${textFontSize * pt}px ${bodyFamily}`;
+        const lines = wrapTextToLines(item.ev.title, textAvailPt, maxLines, (s) =>
+          measureTextWidthPx(s, fontSpec)
+        );
+
+        segments.push({
+          id: `${stripId}-${item.ev.id}-${item.startIdx}`,
+          eventId: item.ev.id,
+          title: item.ev.title,
+          color: item.ev.color,
+          x: segX,
+          y: segY,
+          w: laneW - (totalLanes > 1 ? padX * 0.35 : 0),
+          h: segH,
+          orientation: 'vertical',
+          fontSizeIn: textFontSize,
+          lines,
+          lineHeightIn,
+          startDateKey: firstCell.dateKey!,
+        });
+      }
+    } else {
+      // Horizontal strip (matrix or block week-row)
+      const sampleCell = stripCells[0];
+      const padX = Math.min(sampleCell.w * 0.09, 0.1);
+      const padY = Math.min(sampleCell.h * 0.08, 0.09);
+      const baseScale =
+        sampleCell.styleVariant === 'matrix'
+          ? Math.min(sampleCell.w * 0.34, sampleCell.h * 0.22)
+          : Math.min(sampleCell.w * 0.22, sampleCell.h * 0.24);
+      const numFontSize = Math.max(4 / pt, baseScale * config.typography.dayNumberScale);
+      const lineFontSize = Math.max(4 / pt, Math.min(numFontSize * 0.56, sampleCell.w * 0.13));
+      const lineHeightIn = lineFontSize * 1.25;
+      const topAnchorY = sampleCell.y + padY + numFontSize * 1.2;
+      const singleLineBandH = lineFontSize * 1.48;
+      const bandGap = lineFontSize * 0.24;
+
+      // Track extra height if a single-lane span wraps to 2 lines
+      const laneExtraY = new Array<number>(laneEnds.length).fill(0);
+
+      for (const item of intervals) {
+        const firstCell = stripCells[item.startIdx];
+        const lastCell = stripCells[item.endIdx];
+        const segX = firstCell.x + padX * 0.65;
+        const segW = lastCell.x + lastCell.w - padX * 0.65 - segX;
+        const barW = Math.max(0.025, 2.2 / pt);
+        const textAvailPt = Math.max(12, (segW - barW - padX * 0.9) * pt);
+        const fontSpec = `600 ${lineFontSize * pt}px ${bodyFamily}`;
+
+        const laneTopOffset = item.lane * (singleLineBandH + bandGap) + laneExtraY[item.lane];
+        const segY = topAnchorY + laneTopOffset;
+        const maxBottomY = sampleCell.y + sampleCell.h - padY * 0.6;
+        if (segY + lineFontSize > maxBottomY) continue;
+
+        const canExpandTwoLines =
+          laneEnds.length === 1 &&
+          segY + lineHeightIn * 2 + bandGap <= maxBottomY;
+        const maxLines = canExpandTwoLines ? 2 : 1;
+        const lines = wrapTextToLines(item.ev.title, textAvailPt, maxLines, (s) =>
+          measureTextWidthPx(s, fontSpec)
+        );
+        const usedLines = Math.max(1, lines.length);
+        const segH = usedLines === 1 ? singleLineBandH : usedLines * lineHeightIn + lineFontSize * 0.35;
+
+        if (usedLines > 1 && item.lane + 1 < laneExtraY.length) {
+          laneExtraY[item.lane + 1] += segH - singleLineBandH;
+        }
+
+        const bottomRelTop = laneTopOffset + segH + bandGap;
+        for (let k = item.startIdx; k <= item.endIdx; k++) {
+          stripCells[k].reservedTopIn = Math.max(stripCells[k].reservedTopIn, bottomRelTop);
+        }
+
+        segments.push({
+          id: `${stripId}-${item.ev.id}-${item.startIdx}`,
+          eventId: item.ev.id,
+          title: item.ev.title,
+          color: item.ev.color,
+          x: segX,
+          y: segY,
+          w: segW,
+          h: segH,
+          orientation: 'horizontal',
+          fontSizeIn: lineFontSize,
+          lines,
+          lineHeightIn,
+          startDateKey: firstCell.dateKey!,
+        });
+      }
+    }
+  }
+
+  return segments;
+}
+

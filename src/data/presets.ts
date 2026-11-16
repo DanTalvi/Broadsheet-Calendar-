@@ -246,9 +246,5 @@ export const DEFAULT_CONFIG: CalendarConfig = {
     letterSpacingScale: 1.0,
   },
   palette: COLOR_PALETTES[0],
-  events: {
-    '2027-01-18': [{ id: 'sample-1', title: 'Q1 Planning', color: '#1D4ED8', fillCell: false }],
-    '2027-04-12': [{ id: 'sample-2', title: 'Spring Launch', color: '#DC2626', fillCell: true }],
-    '2027-09-20': [{ id: 'sample-3', title: 'Annual Offsite', color: '#15803D', fillCell: false }],
-  },
+  spanEvents: [],
 };

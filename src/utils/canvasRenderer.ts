@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { CalendarConfig } from '../types/calendar';
-import { ComputedCalendarLayout, ComputedCell, ComputedLabel } from './calendarLayout';
+import { ComputedCalendarLayout, ComputedCell, ComputedLabel, ComputedSpanSegment } from './calendarLayout';
+import { measureTextWidthPx, wrapTextToLines } from './textWrap';
 
 export function blendHexColors(baseHex: string, tintHex: string, strength: number): string {
   const s = Math.max(0, Math.min(1, strength));
@@ -125,6 +126,12 @@ export function renderCalendarBandToCanvas(
     ctx.stroke();
   }
 
+  // 3b. Multi-day Spanning Event Ribbons (drawn above grid lines so text spans cleanly across cells)
+  for (const seg of layout.spanSegments) {
+    if (seg.y + seg.h < bandTopIn || seg.y > bandBottomIn) continue;
+    renderSpanSegmentToCanvas(ctx, seg, config, s);
+  }
+
   // 4. Labels (Headers, Months, Weekdays, Footers)
   for (const lbl of layout.labels) {
     if (lbl.y + lbl.h < bandTopIn || lbl.y - lbl.h > bandBottomIn) continue;
@@ -172,10 +179,11 @@ function renderCellToCanvas(
   const cw = cell.w * s;
   const ch = cell.h * s;
 
-  // Event full-cell fill highlight if flagged
+  // Event or spanning full-cell fill highlight if flagged
   const filledEvent = cell.events.find((ev) => ev.fillCell);
-  if (filledEvent) {
-    ctx.fillStyle = hexToRgba(filledEvent.color, 0.14);
+  const fillHex = filledEvent?.color ?? cell.spanFillColor;
+  if (fillHex) {
+    ctx.fillStyle = hexToRgba(fillHex, 0.14);
     ctx.fillRect(cx, cy, cw, ch);
   }
 
@@ -228,21 +236,33 @@ function renderCellToCanvas(
     }
 
     const availW = rightCursorX - metaStartX;
-    if (availW > 0.2 * s) {
+    if (availW > 0.2 * s && !cell.hasVerticalSpan) {
       const primaryEv = cell.events[0];
       if (primaryEv) {
         const barW = Math.max(2, 0.025 * s);
+        const evFontSize = Math.min(fontSize * 0.72, ch * 0.38);
+        const lineH = evFontSize * 1.18;
+        const maxLines = Math.max(1, Math.min(2, Math.floor((ch - padY * 0.6) / lineH)));
+        const textAvail = availW - barW - padX * 0.5;
+        ctx.font = `600 ${evFontSize}px ${bodyFamily}`;
+        const lines = wrapTextToLines(primaryEv.title, textAvail, maxLines, (str) =>
+          ctx.measureText(str).width
+        );
+        const blockH = lines.length * lineH;
+        const startY = cy + (ch - blockH) * 0.5;
         ctx.fillStyle = primaryEv.color;
-        ctx.fillRect(metaStartX, cy + ch * 0.22, barW, ch * 0.56);
-        ctx.font = `600 ${fontSize * 0.74}px ${bodyFamily}`;
+        ctx.fillRect(metaStartX, cy + ch * 0.18, barW, ch * 0.64);
         ctx.fillStyle = config.palette.inkPrimary;
         ctx.textAlign = 'left';
-        const txt = truncateTextToWidth(ctx, primaryEv.title, availW - barW - padX * 0.5);
-        ctx.fillText(txt, metaStartX + barW + padX * 0.45, cy + ch * 0.5);
+        ctx.textBaseline = 'top';
+        lines.forEach((ln, idx) => {
+          ctx.fillText(ln, metaStartX + barW + padX * 0.45, startY + idx * lineH);
+        });
       } else if (cell.holiday) {
         ctx.font = `500 ${fontSize * 0.68}px ${bodyFamily}`;
         ctx.fillStyle = config.palette.holidayInk;
         ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
         const txt = truncateTextToWidth(ctx, cell.holiday, availW);
         ctx.fillText(txt, metaStartX, cy + ch * 0.5);
       }
@@ -332,35 +352,99 @@ function renderCellToCanvas(
     ctx.fillText(badge, cx + cw - padX, cy + ch - padY * 0.6);
   }
 
-  // Holiday & Events stack
-  let cursorY = cy + padY + numFontSize * 1.18;
-  const maxCursorY = cy + ch - padY * 0.8;
+  // Holiday & Events stack (offset cleanly below any spanning ribbons in this cell)
+  let cursorY = cy + padY + numFontSize * 1.18 + cell.reservedTopIn * s;
+  const maxCursorY = cy + ch - padY * 0.7;
   const lineFontSize = Math.max(4, Math.min(numFontSize * 0.58, cw * 0.13));
+  const lineStep = lineFontSize * 1.24;
 
   if (cell.holiday && cursorY + lineFontSize <= maxCursorY) {
-    ctx.font = `600 ${lineFontSize * 0.92}px ${bodyFamily}`;
+    const holFontSize = lineFontSize * 0.92;
+    const holStep = holFontSize * 1.22;
+    const availLines = Math.max(1, Math.floor((maxCursorY - cursorY) / holStep));
+    ctx.font = `600 ${holFontSize}px ${bodyFamily}`;
     ctx.fillStyle = config.palette.holidayInk;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    const txt = truncateTextToWidth(ctx, cell.holiday, cw - padX * 2);
-    ctx.fillText(txt, cx + padX, cursorY);
-    cursorY += lineFontSize * 1.25;
+    const holLines = wrapTextToLines(cell.holiday, cw - padX * 2, Math.min(2, availLines), (str) =>
+      ctx.measureText(str).width
+    );
+    holLines.forEach((ln, idx) => {
+      ctx.fillText(ln, cx + padX, cursorY + idx * holStep);
+    });
+    cursorY += holLines.length * holStep + lineFontSize * 0.2;
   }
 
   for (const ev of cell.events) {
-    if (cursorY + lineFontSize * 1.15 > maxCursorY) break;
-    const barH = lineFontSize * 1.25;
+    if (cursorY + lineFontSize > maxCursorY) break;
     const barW = Math.max(2, 0.025 * s);
-    ctx.fillStyle = ev.color;
-    ctx.fillRect(cx + padX, cursorY, barW, barH);
+    const textAvail = cw - padX * 2 - barW - padX * 0.4;
+    const remainLines = Math.max(1, Math.floor((maxCursorY - cursorY) / lineStep));
     ctx.font = `600 ${lineFontSize}px ${bodyFamily}`;
+    const evLines = wrapTextToLines(ev.title, textAvail, remainLines, (str) =>
+      ctx.measureText(str).width
+    );
+    if (evLines.length === 0) continue;
+
+    const blockH = evLines.length * lineStep;
+    ctx.fillStyle = ev.color;
+    ctx.fillRect(cx + padX, cursorY, barW, blockH);
     ctx.fillStyle = config.palette.inkPrimary;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    const txt = truncateTextToWidth(ctx, ev.title, cw - padX * 2 - barW - padX * 0.4);
-    ctx.fillText(txt, cx + padX + barW + padX * 0.4, cursorY + lineFontSize * 0.08);
-    cursorY += barH + lineFontSize * 0.28;
+    evLines.forEach((ln, idx) => {
+      ctx.fillText(ln, cx + padX + barW + padX * 0.4, cursorY + idx * lineStep + lineFontSize * 0.06);
+    });
+    cursorY += blockH + lineFontSize * 0.3;
   }
+}
+
+function renderSpanSegmentToCanvas(
+  ctx: CanvasRenderingContext2D,
+  seg: ComputedSpanSegment,
+  config: CalendarConfig,
+  s: number
+) {
+  const sx = seg.x * s;
+  const sy = seg.y * s;
+  const sw = seg.w * s;
+  const sh = seg.h * s;
+  const barW = Math.max(2, 0.03 * s);
+  const fontSizePx = seg.fontSizeIn * s;
+  const lineHPx = seg.lineHeightIn * s;
+  const bodyFamily = `${config.typography.bodyFont}, sans-serif`;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(sx, sy, sw, sh);
+  ctx.clip();
+
+  // Opaque blended ribbon backing so vertical cell dividers don't cut through spanning text
+  ctx.fillStyle = blendHexColors(config.palette.paperBg, seg.color, 0.14);
+  ctx.fillRect(sx, sy, sw, sh);
+
+  // Crisp left accent bar
+  ctx.fillStyle = seg.color;
+  ctx.fillRect(sx, sy, barW, sh);
+
+  ctx.font = `600 ${fontSizePx}px ${bodyFamily}`;
+  ctx.fillStyle = config.palette.inkPrimary;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  setCanvasLetterSpacing(ctx, 0);
+
+  const textPadX = barW + Math.max(4, fontSizePx * 0.45);
+  const totalTextH = seg.lines.length * lineHPx;
+  const startY =
+    seg.orientation === 'vertical'
+      ? sy + Math.max(fontSizePx * 0.35, (sh - totalTextH) * 0.5)
+      : sy + Math.max(fontSizePx * 0.15, (sh - totalTextH) * 0.52);
+
+  seg.lines.forEach((ln, idx) => {
+    ctx.fillText(ln, sx + textPadX, startY + idx * lineHPx);
+  });
+
+  ctx.restore();
 }
 
 function drawMoonCanvas(
@@ -626,12 +710,17 @@ export function exportVectorSVG(layout: ComputedCalendarLayout, config: Calendar
     );
   }
 
-  // Clip paths for cells
+  // Clip paths for cells & span segments
   parts.push('<defs>');
   for (const cell of layout.cells) {
     if (cell.isEmpty) continue;
     parts.push(
       `<clipPath id="svg-clip-${escapeXml(cell.id)}"><rect x="${(cell.x * pt).toFixed(2)}" y="${(cell.y * pt).toFixed(2)}" width="${(cell.w * pt).toFixed(2)}" height="${(cell.h * pt).toFixed(2)}" /></clipPath>`
+    );
+  }
+  for (const seg of layout.spanSegments) {
+    parts.push(
+      `<clipPath id="svg-clip-seg-${escapeXml(seg.id)}"><rect x="${(seg.x * pt).toFixed(2)}" y="${(seg.y * pt).toFixed(2)}" width="${(seg.w * pt).toFixed(2)}" height="${(seg.h * pt).toFixed(2)}" /></clipPath>`
     );
   }
   parts.push('</defs>');
@@ -649,9 +738,10 @@ export function exportVectorSVG(layout: ComputedCalendarLayout, config: Calendar
     parts.push(`<g clip-path="url(#svg-clip-${escapeXml(cell.id)})">`);
 
     const filledEvent = cell.events.find((ev) => ev.fillCell);
-    if (filledEvent) {
+    const fillHex = filledEvent?.color ?? cell.spanFillColor;
+    if (fillHex) {
       parts.push(
-        `<rect x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" width="${cw.toFixed(2)}" height="${ch.toFixed(2)}" fill="${filledEvent.color}" fill-opacity="0.14" />`
+        `<rect x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" width="${cw.toFixed(2)}" height="${ch.toFixed(2)}" fill="${fillHex}" fill-opacity="0.14" />`
       );
     }
 
@@ -673,17 +763,31 @@ export function exportVectorSVG(layout: ComputedCalendarLayout, config: Calendar
       parts.push(
         `<text x="${(cx + padX + fontSize * 1.45).toFixed(2)}" y="${(cy + ch * 0.5).toFixed(2)}" font-family="${escapeXml(bodyFamily)}" font-size="${(fontSize * 0.68).toFixed(2)}" font-weight="600" fill="${cell.isWeekend ? config.palette.accent : config.palette.inkMuted}" dominant-baseline="central">${cell.weekdayLabel.slice(0, 3).toUpperCase()}</text>`
       );
-      if (cell.events[0]) {
-        parts.push(
-          `<rect x="${(cx + padX + fontSize * 3.8).toFixed(2)}" y="${(cy + ch * 0.24).toFixed(2)}" width="2" height="${(ch * 0.52).toFixed(2)}" fill="${cell.events[0].color}" />`
-        );
-        parts.push(
-          `<text x="${(cx + padX + fontSize * 3.8 + 6).toFixed(2)}" y="${(cy + ch * 0.5).toFixed(2)}" font-family="${escapeXml(bodyFamily)}" font-size="${(fontSize * 0.72).toFixed(2)}" font-weight="600" fill="${config.palette.inkPrimary}" dominant-baseline="central">${escapeXml(cell.events[0].title)}</text>`
-        );
-      } else if (cell.holiday) {
-        parts.push(
-          `<text x="${(cx + padX + fontSize * 3.8).toFixed(2)}" y="${(cy + ch * 0.5).toFixed(2)}" font-family="${escapeXml(bodyFamily)}" font-size="${(fontSize * 0.68).toFixed(2)}" font-weight="500" fill="${config.palette.holidayInk}" dominant-baseline="central">${escapeXml(cell.holiday)}</text>`
-        );
+      if (!cell.hasVerticalSpan) {
+        if (cell.events[0]) {
+          const evFontSize = Math.min(fontSize * 0.72, ch * 0.38);
+          const lineH = evFontSize * 1.18;
+          const maxLines = Math.max(1, Math.min(2, Math.floor((ch - padY * 0.6) / lineH)));
+          const metaStartX = cx + padX + fontSize * 3.8;
+          const availW = Math.max(10, cx + cw - padX - metaStartX - 6);
+          const fontSpec = `600 ${evFontSize}px ${config.typography.bodyFont}, sans-serif`;
+          const evLines = wrapTextToLines(cell.events[0].title, availW, maxLines, (s) =>
+            measureTextWidthPx(s, fontSpec)
+          );
+          const startY = cy + (ch - evLines.length * lineH) * 0.5;
+          parts.push(
+            `<rect x="${metaStartX.toFixed(2)}" y="${(cy + ch * 0.18).toFixed(2)}" width="2" height="${(ch * 0.64).toFixed(2)}" fill="${cell.events[0].color}" />`
+          );
+          evLines.forEach((ln, idx) => {
+            parts.push(
+              `<text x="${(metaStartX + 6).toFixed(2)}" y="${(startY + idx * lineH).toFixed(2)}" font-family="${escapeXml(bodyFamily)}" font-size="${evFontSize.toFixed(2)}" font-weight="600" fill="${config.palette.inkPrimary}" dominant-baseline="hanging">${escapeXml(ln)}</text>`
+            );
+          });
+        } else if (cell.holiday) {
+          parts.push(
+            `<text x="${(cx + padX + fontSize * 3.8).toFixed(2)}" y="${(cy + ch * 0.5).toFixed(2)}" font-family="${escapeXml(bodyFamily)}" font-size="${(fontSize * 0.68).toFixed(2)}" font-weight="500" fill="${config.palette.holidayInk}" dominant-baseline="central">${escapeXml(cell.holiday)}</text>`
+          );
+        }
       }
       parts.push('</g>');
       continue;
@@ -742,24 +846,47 @@ export function exportVectorSVG(layout: ComputedCalendarLayout, config: Calendar
       );
     }
 
-    let cursorY = cy + padY + numFontSize * 1.2;
-    const lineSize = Math.max(4, Math.min(numFontSize * 0.56, cw * 0.12));
-    if (cell.holiday && cursorY + lineSize < cy + ch - padY) {
-      parts.push(
-        `<text x="${(cx + padX).toFixed(2)}" y="${cursorY.toFixed(2)}" dominant-baseline="hanging" font-family="${escapeXml(bodyFamily)}" font-size="${(lineSize * 0.92).toFixed(2)}" font-weight="600" fill="${config.palette.holidayInk}">${escapeXml(cell.holiday)}</text>`
+    let cursorY = cy + padY + numFontSize * 1.18 + cell.reservedTopIn * pt;
+    const maxCursorY = cy + ch - padY * 0.7;
+    const lineSize = Math.max(4, Math.min(numFontSize * 0.58, cw * 0.13));
+    const lineStep = lineSize * 1.24;
+
+    if (cell.holiday && cursorY + lineSize <= maxCursorY) {
+      const holSize = lineSize * 0.92;
+      const holStep = holSize * 1.22;
+      const availLines = Math.max(1, Math.min(2, Math.floor((maxCursorY - cursorY) / holStep)));
+      const fontSpec = `600 ${holSize}px ${config.typography.bodyFont}, sans-serif`;
+      const holLines = wrapTextToLines(cell.holiday, cw - padX * 2, availLines, (s) =>
+        measureTextWidthPx(s, fontSpec)
       );
-      cursorY += lineSize * 1.3;
+      holLines.forEach((ln, idx) => {
+        parts.push(
+          `<text x="${(cx + padX).toFixed(2)}" y="${(cursorY + idx * holStep).toFixed(2)}" dominant-baseline="hanging" font-family="${escapeXml(bodyFamily)}" font-size="${holSize.toFixed(2)}" font-weight="600" fill="${config.palette.holidayInk}">${escapeXml(ln)}</text>`
+        );
+      });
+      cursorY += holLines.length * holStep + lineSize * 0.2;
     }
 
     for (const ev of cell.events) {
-      if (cursorY + lineSize > cy + ch - padY) break;
-      parts.push(
-        `<rect x="${(cx + padX).toFixed(2)}" y="${cursorY.toFixed(2)}" width="2" height="${(lineSize * 1.2).toFixed(2)}" fill="${ev.color}" />`
+      if (cursorY + lineSize > maxCursorY) break;
+      const barW = Math.max(1.8, 0.025 * pt);
+      const textAvail = cw - padX * 2 - barW - padX * 0.4;
+      const remainLines = Math.max(1, Math.floor((maxCursorY - cursorY) / lineStep));
+      const fontSpec = `600 ${lineSize}px ${config.typography.bodyFont}, sans-serif`;
+      const evLines = wrapTextToLines(ev.title, textAvail, remainLines, (s) =>
+        measureTextWidthPx(s, fontSpec)
       );
+      if (evLines.length === 0) continue;
+      const blockH = evLines.length * lineStep;
       parts.push(
-        `<text x="${(cx + padX + 5).toFixed(2)}" y="${cursorY.toFixed(2)}" dominant-baseline="hanging" font-family="${escapeXml(bodyFamily)}" font-size="${lineSize.toFixed(2)}" font-weight="600" fill="${config.palette.inkPrimary}">${escapeXml(ev.title)}</text>`
+        `<rect x="${(cx + padX).toFixed(2)}" y="${cursorY.toFixed(2)}" width="${barW.toFixed(2)}" height="${blockH.toFixed(2)}" fill="${ev.color}" />`
       );
-      cursorY += lineSize * 1.45;
+      evLines.forEach((ln, idx) => {
+        parts.push(
+          `<text x="${(cx + padX + barW + padX * 0.4).toFixed(2)}" y="${(cursorY + idx * lineStep + lineSize * 0.06).toFixed(2)}" dominant-baseline="hanging" font-family="${escapeXml(bodyFamily)}" font-size="${lineSize.toFixed(2)}" font-weight="600" fill="${config.palette.inkPrimary}">${escapeXml(ln)}</text>`
+        );
+      });
+      cursorY += blockH + lineSize * 0.3;
     }
     parts.push('</g>');
   }
@@ -769,6 +896,39 @@ export function exportVectorSVG(layout: ComputedCalendarLayout, config: Calendar
     parts.push(
       `<line x1="${(l.x1 * pt).toFixed(2)}" y1="${(l.y1 * pt).toFixed(2)}" x2="${(l.x2 * pt).toFixed(2)}" y2="${(l.y2 * pt).toFixed(2)}" stroke="${l.color}" stroke-width="${Math.max(0.4, l.widthIn * pt).toFixed(2)}" />`
     );
+  }
+
+  // Multi-day Spanning Event Ribbons
+  for (const seg of layout.spanSegments) {
+    const sx = seg.x * pt;
+    const sy = seg.y * pt;
+    const sw = seg.w * pt;
+    const sh = seg.h * pt;
+    const barW = Math.max(1.8, 0.03 * pt);
+    const fontSizePt = seg.fontSizeIn * pt;
+    const lineHPt = seg.lineHeightIn * pt;
+    const bodyFamily = `${config.typography.bodyFont.replace(/"/g, '')}, sans-serif`;
+    const ribbonBg = blendHexColors(config.palette.paperBg, seg.color, 0.14);
+    const textPadX = barW + Math.max(4, fontSizePt * 0.45);
+    const totalTextH = seg.lines.length * lineHPt;
+    const startY =
+      seg.orientation === 'vertical'
+        ? sy + Math.max(fontSizePt * 0.35, (sh - totalTextH) * 0.5)
+        : sy + Math.max(fontSizePt * 0.15, (sh - totalTextH) * 0.52);
+
+    parts.push(`<g clip-path="url(#svg-clip-seg-${escapeXml(seg.id)})">`);
+    parts.push(
+      `<rect x="${sx.toFixed(2)}" y="${sy.toFixed(2)}" width="${sw.toFixed(2)}" height="${sh.toFixed(2)}" fill="${ribbonBg}" />`
+    );
+    parts.push(
+      `<rect x="${sx.toFixed(2)}" y="${sy.toFixed(2)}" width="${barW.toFixed(2)}" height="${sh.toFixed(2)}" fill="${seg.color}" />`
+    );
+    seg.lines.forEach((ln, idx) => {
+      parts.push(
+        `<text x="${(sx + textPadX).toFixed(2)}" y="${(startY + idx * lineHPt).toFixed(2)}" dominant-baseline="hanging" font-family="${escapeXml(bodyFamily)}" font-size="${fontSizePt.toFixed(2)}" font-weight="600" fill="${config.palette.inkPrimary}">${escapeXml(ln)}</text>`
+      );
+    });
+    parts.push('</g>');
   }
 
   // Labels

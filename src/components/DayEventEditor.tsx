@@ -1,27 +1,32 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, X } from 'lucide-react';
 import { EVENT_COLORS } from '../data/presets';
-import { CalendarDayEvent } from '../types/calendar';
+import { CalendarDayEvent, CalendarSpanEvent } from '../types/calendar';
 import { getUSHolidaysForYear } from '../utils/calendarMath';
 
 interface DayEventEditorProps {
   dateKey: string;
-  events: CalendarDayEvent[];
+  events: CalendarSpanEvent[];
   onClose: () => void;
-  onAddEvent: (dateKey: string, event: Omit<CalendarDayEvent, 'id'>) => void;
-  onDeleteEvent: (dateKey: string, eventId: string) => void;
+  onAddEventRange: (startKey: string, endKey: string, event: Omit<CalendarDayEvent, 'id'>) => void;
+  onDeleteEvent: (eventId: string) => void;
 }
 
 export function DayEventEditor({
   dateKey,
   events,
   onClose,
-  onAddEvent,
+  onAddEventRange,
   onDeleteEvent,
 }: DayEventEditorProps) {
   const [title, setTitle] = useState('');
+  const [endDate, setEndDate] = useState(dateKey);
   const [color, setColor] = useState(EVENT_COLORS[0].hex);
   const [fillCell, setFillCell] = useState(false);
+
+  useEffect(() => {
+    setEndDate(dateKey);
+  }, [dateKey]);
 
   const [yStr, mStr, dStr] = dateKey.split('-');
   const dateObj = new Date(Number(yStr), Number(mStr) - 1, Number(dStr));
@@ -36,8 +41,10 @@ export function DayEventEditor({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
-    onAddEvent(dateKey, { title: title.trim(), color, fillCell });
+    const effectiveEnd = endDate && endDate >= dateKey ? endDate : dateKey;
+    onAddEventRange(dateKey, effectiveEnd, { title: title.trim(), color, fillCell });
     setTitle('');
+    setEndDate(dateKey);
   };
 
   return (
@@ -60,7 +67,7 @@ export function DayEventEditor({
       </div>
 
       {events.length > 0 && (
-        <div className="py-2 space-y-1.5 border-b border-stone-200">
+        <div className="py-2 space-y-1.5 border-b border-stone-200 max-h-40 overflow-y-auto">
           {events.map((ev) => (
             <div key={ev.id} className="flex items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2 min-w-0">
@@ -68,12 +75,20 @@ export function DayEventEditor({
                   className="w-1.5 h-3.5 rounded-xs shrink-0"
                   style={{ backgroundColor: ev.color }}
                 />
-                <span className="truncate font-medium text-stone-800">{ev.title}</span>
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-stone-800">{ev.title}</div>
+                  {ev.endDate > ev.startDate && (
+                    <div className="text-[10px] text-stone-500 tabular-nums">
+                      {ev.startDate} → {ev.endDate}
+                    </div>
+                  )}
+                </div>
               </div>
               <button
                 type="button"
-                onClick={() => onDeleteEvent(dateKey, ev.id)}
+                onClick={() => onDeleteEvent(ev.id)}
                 className="p-1 text-stone-400 hover:text-red-700 cursor-pointer shrink-0"
+                aria-label={`Remove ${ev.title}`}
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
@@ -87,10 +102,20 @@ export function DayEventEditor({
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Add label for this date..."
+          placeholder="Add event or span title..."
           autoFocus
           className="w-full px-2.5 py-1.5 text-xs border border-stone-300 rounded-md focus:outline-none focus:border-stone-900"
         />
+        <label className="flex items-center justify-between gap-2 text-[11px] text-stone-600">
+          <span>End Date (optional span)</span>
+          <input
+            type="date"
+            value={endDate}
+            min={dateKey}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="px-2 py-1 text-xs tabular-nums border border-stone-300 rounded-md focus:outline-none focus:border-stone-900"
+          />
+        </label>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             {EVENT_COLORS.map((c) => (
@@ -113,7 +138,7 @@ export function DayEventEditor({
               onChange={(e) => setFillCell(e.target.checked)}
               className="accent-stone-900"
             />
-            <span>Shade cell</span>
+            <span>Shade cells</span>
           </label>
         </div>
         <button
@@ -122,7 +147,7 @@ export function DayEventEditor({
           className="w-full py-1.5 px-3 text-xs font-semibold text-white bg-stone-900 rounded-md hover:bg-stone-800 disabled:opacity-40 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
-          <span>Add Note</span>
+          <span>{endDate > dateKey ? 'Add Spanning Event' : 'Add Note'}</span>
         </button>
       </form>
     </div>

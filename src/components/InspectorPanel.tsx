@@ -23,8 +23,9 @@ interface InspectorPanelProps {
   config: CalendarConfig;
   onChange: (updater: (prev: CalendarConfig) => CalendarConfig) => void;
   onAddEventRange: (startKey: string, endKey: string, event: Omit<CalendarDayEvent, 'id'>) => void;
-  onDeleteEvent: (dateKey: string, eventId: string) => void;
+  onDeleteEvent: (eventId: string) => void;
   onClearAllEvents: () => void;
+  eventsSyncSlot?: React.ReactNode;
 }
 
 export function InspectorPanel({
@@ -34,6 +35,7 @@ export function InspectorPanel({
   onAddEventRange,
   onDeleteEvent,
   onClearAllEvents,
+  eventsSyncSlot,
 }: InspectorPanelProps) {
   const [newStart, setNewStart] = useState(`${config.year}-05-10`);
   const [newEnd, setNewEnd] = useState(`${config.year}-05-10`);
@@ -77,9 +79,9 @@ export function InspectorPanel({
     setNewTitle('');
   };
 
-  const allEvents = Object.entries(config.events)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .flatMap(([dateKey, items]) => items.map((ev) => ({ dateKey, ...ev })));
+  const allEvents = [...config.spanEvents].sort((a, b) =>
+    a.startDate.localeCompare(b.startDate)
+  );
 
   return (
     <aside className="w-full lg:w-[340px] max-h-[42vh] lg:max-h-none shrink-0 bg-white border-b lg:border-b-0 lg:border-r border-stone-200 flex flex-col lg:h-full overflow-hidden">
@@ -902,14 +904,14 @@ export function InspectorPanel({
               </div>
 
               {allEvents.length === 0 ? (
-                <p className="text-xs text-stone-500 py-4">
-                  No custom events yet. Click any day directly on the calendar sheet or use the form above.
+                <p className="text-xs text-stone-500 py-3">
+                  No events yet. Click any day on the sheet, add one above, or import from Google Calendar / .ics below.
                 </p>
               ) : (
-                <div className="divide-y divide-stone-100 border-t border-stone-100">
+                <div className="divide-y divide-stone-100 border-t border-stone-100 max-h-52 overflow-y-auto pr-1">
                   {allEvents.map((ev) => (
                     <div
-                      key={`${ev.dateKey}-${ev.id}`}
+                      key={ev.id}
                       className="py-2 flex items-center justify-between gap-2 text-xs"
                     >
                       <div className="flex items-center gap-2 min-w-0">
@@ -919,12 +921,16 @@ export function InspectorPanel({
                         />
                         <div className="min-w-0">
                           <div className="font-medium text-stone-900 truncate">{ev.title}</div>
-                          <div className="text-[11px] text-stone-500 tabular-nums">{ev.dateKey}</div>
+                          <div className="text-[11px] text-stone-500 tabular-nums">
+                            {ev.endDate > ev.startDate
+                              ? `${ev.startDate} → ${ev.endDate}`
+                              : ev.startDate}
+                          </div>
                         </div>
                       </div>
                       <button
                         type="button"
-                        onClick={() => onDeleteEvent(ev.dateKey, ev.id)}
+                        onClick={() => onDeleteEvent(ev.id)}
                         aria-label={`Remove ${ev.title}`}
                         className="p-1 text-stone-400 hover:text-red-700 transition-colors cursor-pointer shrink-0"
                       >
@@ -935,6 +941,13 @@ export function InspectorPanel({
                 </div>
               )}
             </section>
+
+            {eventsSyncSlot && (
+              <>
+                <hr className="border-stone-200" />
+                {eventsSyncSlot}
+              </>
+            )}
           </>
         )}
       </div>

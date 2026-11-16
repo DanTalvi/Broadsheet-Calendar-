@@ -56,6 +56,15 @@ export interface CalendarDayEvent {
   fillCell?: boolean;
 }
 
+export interface CalendarSpanEvent {
+  id: string;
+  title: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string;   // YYYY-MM-DD
+  color: string;
+  fillCell?: boolean;
+}
+
 export interface PaperSizePreset {
   id: string;
   name: string;
@@ -90,5 +99,6 @@ export interface CalendarConfig {
   weekendTintStrength: number;
   typography: TypographyConfig;
   palette: ColorPalette;
-  events: Record<string, CalendarDayEvent[]>;
+  spanEvents: CalendarSpanEvent[];
+  events?: Record<string, CalendarDayEvent[]>;
 }

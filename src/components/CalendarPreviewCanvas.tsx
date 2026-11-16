@@ -3,6 +3,7 @@ import { Maximize2, Minus, Plus, Eye } from 'lucide-react';
 import { CalendarConfig } from '../types/calendar';
 import { ComputedCalendarLayout } from '../utils/calendarLayout';
 import { blendHexColors, hexToRgba } from '../utils/canvasRenderer';
+import { measureTextWidthPx, wrapTextToLines } from '../utils/textWrap';
 
 interface CalendarPreviewCanvasProps {
   config: CalendarConfig;
@@ -208,6 +209,16 @@ export function CalendarPreviewCanvas({
                   </clipPath>
                 ) : null
               )}
+              {layout.spanSegments.map((seg) => (
+                <clipPath key={`clip-seg-${seg.id}`} id={`clip-seg-${seg.id}`}>
+                  <rect
+                    x={seg.x * pt}
+                    y={seg.y * pt}
+                    width={seg.w * pt}
+                    height={seg.h * pt}
+                  />
+                </clipPath>
+              ))}
             </defs>
 
             {/* Base Rectangles (Paper & Weekend Tint Columns) */}
@@ -233,6 +244,7 @@ export function CalendarPreviewCanvas({
               const padY = Math.min(cell.h * 0.08, 0.09) * pt;
               const isSelected = selectedDateKey === cell.dateKey;
               const filledEvent = cell.events.find((ev) => ev.fillCell);
+              const fillHex = filledEvent?.color ?? cell.spanFillColor;
 
               const dayColor = cell.holiday
                 ? config.palette.holidayInk
@@ -263,8 +275,10 @@ export function CalendarPreviewCanvas({
               const numX =
                 align === 'top-left' ? cx + padX : align === 'top-right' ? cx + cw - padX : cx + cw * 0.5;
 
-              const lineSize = Math.max(4, Math.min(numFontSize * 0.56, cw * 0.13));
-              let cursorY = cy + padY + numFontSize * 1.22;
+              const lineSize = Math.max(4, Math.min(numFontSize * 0.58, cw * 0.13));
+              const lineStep = lineSize * 1.24;
+              const startCursorY = cy + padY + numFontSize * 1.18 + cell.reservedTopIn * pt;
+              const maxCursorY = cy + ch - padY * 0.7;
 
               return (
                 <g
@@ -279,7 +293,7 @@ export function CalendarPreviewCanvas({
                     y={cy}
                     width={cw}
                     height={ch}
-                    fill={filledEvent ? hexToRgba(filledEvent.color, 0.14) : 'transparent'}
+                    fill={fillHex ? hexToRgba(fillHex, 0.14) : 'transparent'}
                   />
                   <rect
                     x={cx}
@@ -323,28 +337,45 @@ export function CalendarPreviewCanvas({
                           >
                             {cell.weekdayLabel.slice(0, 3).toUpperCase()}
                           </text>
-                          {primaryEv ? (
-                            <>
-                              <rect
-                                x={cx + padX + vFontSize * 3.8}
-                                y={cy + ch * 0.22}
-                                width={Math.max(1.5, 0.025 * pt)}
-                                height={ch * 0.56}
-                                fill={primaryEv.color}
-                              />
-                              <text
-                                x={cx + padX + vFontSize * 3.8 + 5}
-                                y={cy + ch * 0.5}
-                                fontFamily={bodyFamily}
-                                fontSize={vFontSize * 0.72}
-                                fontWeight={600}
-                                fill={config.palette.inkPrimary}
-                                dominantBaseline="central"
-                              >
-                                {primaryEv.title}
-                              </text>
-                            </>
-                          ) : cell.holiday ? (
+                          {!cell.hasVerticalSpan && primaryEv ? (
+                            (() => {
+                              const evFontSize = Math.min(vFontSize * 0.72, ch * 0.38);
+                              const lineH = evFontSize * 1.18;
+                              const maxLines = Math.max(1, Math.min(2, Math.floor((ch - padY * 0.6) / lineH)));
+                              const metaStartX = cx + padX + vFontSize * 3.8;
+                              const availW = Math.max(10, cx + cw - padX - metaStartX - 6);
+                              const fontSpec = `600 ${evFontSize}px ${bodyFamily}`;
+                              const evLines = wrapTextToLines(primaryEv.title, availW, maxLines, (s) =>
+                                measureTextWidthPx(s, fontSpec)
+                              );
+                              const startY = cy + (ch - evLines.length * lineH) * 0.5;
+                              return (
+                                <>
+                                  <rect
+                                    x={metaStartX}
+                                    y={cy + ch * 0.18}
+                                    width={Math.max(1.5, 0.025 * pt)}
+                                    height={ch * 0.64}
+                                    fill={primaryEv.color}
+                                  />
+                                  {evLines.map((ln, idx) => (
+                                    <text
+                                      key={idx}
+                                      x={metaStartX + Math.max(1.5, 0.025 * pt) + 4}
+                                      y={startY + idx * lineH}
+                                      fontFamily={bodyFamily}
+                                      fontSize={evFontSize}
+                                      fontWeight={600}
+                                      fill={config.palette.inkPrimary}
+                                      dominantBaseline="hanging"
+                                    >
+                                      {ln}
+                                    </text>
+                                  ))}
+                                </>
+                              );
+                            })()
+                          ) : !cell.hasVerticalSpan && cell.holiday ? (
                             <text
                               x={cx + padX + vFontSize * 3.8}
                               y={cy + ch * 0.5}
@@ -432,51 +463,85 @@ export function CalendarPreviewCanvas({
                         />
                       )}
 
-                      {/* Holiday */}
-                      {cell.holiday && cursorY + lineSize < cy + ch - padY * 0.6 && (
-                        <text
-                          x={cx + padX}
-                          y={cursorY}
-                          dominantBaseline="hanging"
-                          fontFamily={bodyFamily}
-                          fontSize={lineSize * 0.92}
-                          fontWeight={600}
-                          fill={config.palette.holidayInk}
-                        >
-                          {cell.holiday}
-                        </text>
-                      )}
+                      {/* Wrapped Holiday & Single-Day Events Stack */}
+                      {(() => {
+                        let curY = startCursorY;
+                        const nodes: React.ReactNode[] = [];
 
-                      {/* User Events */}
-                      {cell.events.map((ev, eIdx) => {
-                        const yPos =
-                          cursorY +
-                          (cell.holiday ? lineSize * 1.3 : 0) +
-                          eIdx * (lineSize * 1.48);
-                        if (yPos + lineSize > cy + ch - padY * 0.5) return null;
-                        return (
-                          <React.Fragment key={ev.id}>
-                            <rect
-                              x={cx + padX}
-                              y={yPos}
-                              width={Math.max(1.5, 0.025 * pt)}
-                              height={lineSize * 1.2}
-                              fill={ev.color}
-                            />
-                            <text
-                              x={cx + padX + Math.max(1.5, 0.025 * pt) + padX * 0.4}
-                              y={yPos + lineSize * 0.08}
-                              dominantBaseline="hanging"
-                              fontFamily={bodyFamily}
-                              fontSize={lineSize}
-                              fontWeight={600}
-                              fill={config.palette.inkPrimary}
-                            >
-                              {ev.title}
-                            </text>
-                          </React.Fragment>
-                        );
-                      })}
+                        if (cell.holiday && curY + lineSize <= maxCursorY) {
+                          const holSize = lineSize * 0.92;
+                          const holStep = holSize * 1.22;
+                          const availLines = Math.max(
+                            1,
+                            Math.min(2, Math.floor((maxCursorY - curY) / holStep))
+                          );
+                          const fontSpec = `600 ${holSize}px ${bodyFamily}`;
+                          const holLines = wrapTextToLines(
+                            cell.holiday,
+                            cw - padX * 2,
+                            availLines,
+                            (s) => measureTextWidthPx(s, fontSpec)
+                          );
+                          holLines.forEach((ln, idx) => {
+                            nodes.push(
+                              <text
+                                key={`hol-${idx}`}
+                                x={cx + padX}
+                                y={curY + idx * holStep}
+                                dominantBaseline="hanging"
+                                fontFamily={bodyFamily}
+                                fontSize={holSize}
+                                fontWeight={600}
+                                fill={config.palette.holidayInk}
+                              >
+                                {ln}
+                              </text>
+                            );
+                          });
+                          curY += holLines.length * holStep + lineSize * 0.2;
+                        }
+
+                        cell.events.forEach((ev) => {
+                          if (curY + lineSize > maxCursorY) return;
+                          const barW = Math.max(1.8, 0.025 * pt);
+                          const textAvail = cw - padX * 2 - barW - padX * 0.4;
+                          const remainLines = Math.max(1, Math.floor((maxCursorY - curY) / lineStep));
+                          const fontSpec = `600 ${lineSize}px ${bodyFamily}`;
+                          const evLines = wrapTextToLines(ev.title, textAvail, remainLines, (s) =>
+                            measureTextWidthPx(s, fontSpec)
+                          );
+                          if (evLines.length === 0) return;
+                          const blockH = evLines.length * lineStep;
+                          nodes.push(
+                            <React.Fragment key={ev.id}>
+                              <rect
+                                x={cx + padX}
+                                y={curY}
+                                width={barW}
+                                height={blockH}
+                                fill={ev.color}
+                              />
+                              {evLines.map((ln, idx) => (
+                                <text
+                                  key={idx}
+                                  x={cx + padX + barW + padX * 0.4}
+                                  y={curY + idx * lineStep + lineSize * 0.06}
+                                  dominantBaseline="hanging"
+                                  fontFamily={bodyFamily}
+                                  fontSize={lineSize}
+                                  fontWeight={600}
+                                  fill={config.palette.inkPrimary}
+                                >
+                                  {ln}
+                                </text>
+                              ))}
+                            </React.Fragment>
+                          );
+                          curY += blockH + lineSize * 0.3;
+                        });
+
+                        return nodes;
+                      })()}
 
                       {/* DOY or ISO Week Badge */}
                       {(cell.dayOfYear !== null || cell.isoWeek !== null) && (
@@ -525,6 +590,50 @@ export function CalendarPreviewCanvas({
                 strokeWidth={Math.max(0.4, l.widthIn * pt)}
               />
             ))}
+
+            {/* Multi-Day Spanning Event Ribbons */}
+            {layout.spanSegments.map((seg) => {
+              const sx = seg.x * pt;
+              const sy = seg.y * pt;
+              const sw = seg.w * pt;
+              const sh = seg.h * pt;
+              const barW = Math.max(1.8, 0.03 * pt);
+              const fontSizePt = seg.fontSizeIn * pt;
+              const lineHPt = seg.lineHeightIn * pt;
+              const ribbonBg = blendHexColors(config.palette.paperBg, seg.color, 0.14);
+              const textPadX = barW + Math.max(4, fontSizePt * 0.45);
+              const totalTextH = seg.lines.length * lineHPt;
+              const startY =
+                seg.orientation === 'vertical'
+                  ? sy + Math.max(fontSizePt * 0.35, (sh - totalTextH) * 0.5)
+                  : sy + Math.max(fontSizePt * 0.15, (sh - totalTextH) * 0.52);
+
+              return (
+                <g
+                  key={seg.id}
+                  clipPath={`url(#clip-seg-${seg.id})`}
+                  onClick={() => onSelectDate(seg.startDateKey)}
+                  className="cursor-pointer"
+                >
+                  <rect x={sx} y={sy} width={sw} height={sh} fill={ribbonBg} />
+                  <rect x={sx} y={sy} width={barW} height={sh} fill={seg.color} />
+                  {seg.lines.map((ln, idx) => (
+                    <text
+                      key={idx}
+                      x={sx + textPadX}
+                      y={startY + idx * lineHPt}
+                      dominantBaseline="hanging"
+                      fontFamily={bodyFamily}
+                      fontSize={fontSizePt}
+                      fontWeight={600}
+                      fill={config.palette.inkPrimary}
+                    >
+                      {ln}
+                    </text>
+                  ))}
+                </g>
+              );
+            })}
 
             {/* Text Labels */}
             {layout.labels.map((lbl, idx) => {
