@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-ui: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono-ui: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  body {
+    font-family: var(--font-ui);
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle drafting-studio scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(28, 25, 23, 0.18);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(28, 25, 23, 0.32);
+}
+
+/* Drafting mat subtle grid background */
+.drafting-mat {
+  background-color: #e6e4de;
+  background-image:
+    linear-gradient(to right, rgba(28, 25, 23, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(28, 25, 23, 0.045) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
