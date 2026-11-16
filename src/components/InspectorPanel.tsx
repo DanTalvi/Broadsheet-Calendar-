@@ -1,5 +1,15 @@
 import React, { useState } from 'react';
-import { ArrowLeftRight, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react';
 import {
   BODY_FONTS,
   COLOR_PALETTES,
@@ -11,6 +21,7 @@ import {
 import {
   CalendarConfig,
   CalendarDayEvent,
+  CalendarSpanEvent,
   DayNumberAlign,
   GridStrokeWeight,
   HeaderAlign,
@@ -23,6 +34,7 @@ interface InspectorPanelProps {
   config: CalendarConfig;
   onChange: (updater: (prev: CalendarConfig) => CalendarConfig) => void;
   onAddEventRange: (startKey: string, endKey: string, event: Omit<CalendarDayEvent, 'id'>) => void;
+  onUpdateEvent: (eventId: string, updates: Partial<Omit<CalendarSpanEvent, 'id'>>) => void;
   onDeleteEvent: (eventId: string) => void;
   onClearAllEvents: () => void;
   eventsSyncSlot?: React.ReactNode;
@@ -33,6 +45,7 @@ export function InspectorPanel({
   config,
   onChange,
   onAddEventRange,
+  onUpdateEvent,
   onDeleteEvent,
   onClearAllEvents,
   eventsSyncSlot,
@@ -42,6 +55,14 @@ export function InspectorPanel({
   const [newTitle, setNewTitle] = useState('');
   const [newColor, setNewColor] = useState(EVENT_COLORS[0].hex);
   const [newFillCell, setNewFillCell] = useState(false);
+
+  const [eventFilter, setEventFilter] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editStart, setEditStart] = useState('');
+  const [editEnd, setEditEnd] = useState('');
+  const [editColor, setEditColor] = useState(EVENT_COLORS[0].hex);
+  const [editFillCell, setEditFillCell] = useState(false);
 
   const updateYear = (nextYear: number) => {
     const clamped = Math.max(2020, Math.min(2040, nextYear));
@@ -82,6 +103,41 @@ export function InspectorPanel({
   const allEvents = [...config.spanEvents].sort((a, b) =>
     a.startDate.localeCompare(b.startDate)
   );
+
+  const filteredEvents = eventFilter.trim()
+    ? allEvents.filter(
+        (ev) =>
+          ev.title.toLowerCase().includes(eventFilter.trim().toLowerCase()) ||
+          ev.startDate.includes(eventFilter.trim()) ||
+          ev.endDate.includes(eventFilter.trim())
+      )
+    : allEvents;
+
+  const startEditingEvent = (ev: CalendarSpanEvent) => {
+    setEditingId(ev.id);
+    setEditTitle(ev.title);
+    setEditStart(ev.startDate);
+    setEditEnd(ev.endDate);
+    setEditColor(ev.color);
+    setEditFillCell(Boolean(ev.fillCell));
+  };
+
+  const cancelEditingEvent = () => {
+    setEditingId(null);
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingId || !editTitle.trim() || !editStart) return;
+    onUpdateEvent(editingId, {
+      title: editTitle.trim(),
+      startDate: editStart,
+      endDate: editEnd && editEnd >= editStart ? editEnd : editStart,
+      color: editColor,
+      fillCell: editFillCell,
+    });
+    setEditingId(null);
+  };
 
   return (
     <aside className="w-full lg:w-[340px] max-h-[42vh] lg:max-h-none shrink-0 bg-white border-b lg:border-b-0 lg:border-r border-stone-200 flex flex-col lg:h-full overflow-hidden">
@@ -857,11 +913,26 @@ export function InspectorPanel({
                         onClick={() => setNewColor(c.hex)}
                         aria-label={c.label}
                         className={`w-5 h-5 rounded-sm transition-transform cursor-pointer ${
-                          newColor === c.hex ? 'ring-2 ring-offset-1 ring-stone-900 scale-110' : ''
+                          newColor.toLowerCase() === c.hex.toLowerCase()
+                            ? 'ring-2 ring-offset-1 ring-stone-900 scale-110'
+                            : ''
                         }`}
                         style={{ backgroundColor: c.hex }}
                       />
                     ))}
+                    <label
+                      title="Custom highlight color"
+                      className="w-5 h-5 rounded-sm border border-stone-300 overflow-hidden cursor-pointer flex items-center justify-center bg-white"
+                      style={{ backgroundColor: newColor }}
+                    >
+                      <input
+                        type="color"
+                        value={newColor}
+                        onChange={(e) => setNewColor(e.target.value)}
+                        aria-label="Custom highlight color"
+                        className="opacity-0 w-full h-full cursor-pointer"
+                      />
+                    </label>
                   </div>
                   <label className="flex items-center gap-1.5 text-[11px] text-stone-600 cursor-pointer">
                     <input
@@ -895,7 +966,10 @@ export function InspectorPanel({
                 {allEvents.length > 0 && (
                   <button
                     type="button"
-                    onClick={onClearAllEvents}
+                    onClick={() => {
+                      setEditingId(null);
+                      onClearAllEvents();
+                    }}
                     className="text-[11px] text-red-700 hover:underline cursor-pointer"
                   >
                     Clear all
@@ -903,41 +977,227 @@ export function InspectorPanel({
                 )}
               </div>
 
+              {allEvents.length > 5 && (
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-stone-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={eventFilter}
+                    onChange={(e) => setEventFilter(e.target.value)}
+                    placeholder="Filter events by title or date…"
+                    className="w-full pl-8 pr-7 py-1.5 text-xs border border-stone-200 rounded-md bg-stone-50/70 focus:bg-white focus:outline-none focus:border-stone-900"
+                  />
+                  {eventFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setEventFilter('')}
+                      aria-label="Clear filter"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-800 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
+
               {allEvents.length === 0 ? (
                 <p className="text-xs text-stone-500 py-3">
                   No events yet. Click any day on the sheet, add one above, or import from Google Calendar / .ics below.
                 </p>
+              ) : filteredEvents.length === 0 ? (
+                <p className="text-xs text-stone-500 py-3">
+                  No events match “{eventFilter}”.
+                </p>
               ) : (
-                <div className="divide-y divide-stone-100 border-t border-stone-100 max-h-52 overflow-y-auto pr-1">
-                  {allEvents.map((ev) => (
-                    <div
-                      key={ev.id}
-                      className="py-2 flex items-center justify-between gap-2 text-xs"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="w-1.5 h-4 rounded-xs shrink-0"
-                          style={{ backgroundColor: ev.color }}
-                        />
-                        <div className="min-w-0">
-                          <div className="font-medium text-stone-900 truncate">{ev.title}</div>
-                          <div className="text-[11px] text-stone-500 tabular-nums">
-                            {ev.endDate > ev.startDate
-                              ? `${ev.startDate} → ${ev.endDate}`
-                              : ev.startDate}
+                <div className="divide-y divide-stone-100 border-t border-stone-100 max-h-80 overflow-y-auto pr-1">
+                  {filteredEvents.map((ev) => {
+                    const isEditing = editingId === ev.id;
+                    if (isEditing) {
+                      return (
+                        <form
+                          key={ev.id}
+                          onSubmit={handleSaveEdit}
+                          className="py-2.5 px-2.5 my-1 bg-stone-50 border border-stone-300 rounded-md space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-stone-700">
+                              Revise Event
+                            </span>
+                            <button
+                              type="button"
+                              onClick={cancelEditingEvent}
+                              aria-label="Cancel revision"
+                              className="p-0.5 text-stone-400 hover:text-stone-800 cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
                           </div>
+
+                          <input
+                            type="text"
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            placeholder="Event title"
+                            autoFocus
+                            className="w-full px-2 py-1.5 text-xs bg-white border border-stone-300 rounded focus:outline-none focus:border-stone-900"
+                          />
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="block">
+                              <span className="text-[10px] text-stone-600">Start Date</span>
+                              <input
+                                type="date"
+                                value={editStart}
+                                onChange={(e) => {
+                                  const next = e.target.value;
+                                  setEditStart(next);
+                                  if (editEnd < next) setEditEnd(next);
+                                }}
+                                className="mt-0.5 w-full px-1.5 py-1 text-[11px] tabular-nums bg-white border border-stone-300 rounded focus:outline-none focus:border-stone-900"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-[10px] text-stone-600">End Date</span>
+                              <input
+                                type="date"
+                                value={editEnd}
+                                min={editStart}
+                                onChange={(e) => setEditEnd(e.target.value)}
+                                className="mt-0.5 w-full px-1.5 py-1 text-[11px] tabular-nums bg-white border border-stone-300 rounded focus:outline-none focus:border-stone-900"
+                              />
+                            </label>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1">
+                              {EVENT_COLORS.map((c) => (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  onClick={() => setEditColor(c.hex)}
+                                  aria-label={`Set color ${c.label}`}
+                                  className={`w-4 h-4 rounded-sm transition-transform cursor-pointer ${
+                                    editColor.toLowerCase() === c.hex.toLowerCase()
+                                      ? 'ring-2 ring-offset-1 ring-stone-900 scale-110'
+                                      : ''
+                                  }`}
+                                  style={{ backgroundColor: c.hex }}
+                                />
+                              ))}
+                              <label
+                                title="Custom highlight color"
+                                className="w-4 h-4 rounded-sm border border-stone-400 overflow-hidden cursor-pointer flex items-center justify-center"
+                                style={{ backgroundColor: editColor }}
+                              >
+                                <input
+                                  type="color"
+                                  value={editColor}
+                                  onChange={(e) => setEditColor(e.target.value)}
+                                  aria-label="Custom highlight color"
+                                  className="opacity-0 w-full h-full cursor-pointer"
+                                />
+                              </label>
+                            </div>
+                            <label className="flex items-center gap-1 text-[11px] text-stone-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={editFillCell}
+                                onChange={(e) => setEditFillCell(e.target.checked)}
+                                className="accent-stone-900"
+                              />
+                              <span>Shade</span>
+                            </label>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2 pt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onDeleteEvent(ev.id);
+                                setEditingId(null);
+                              }}
+                              className="px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={cancelEditingEvent}
+                                className="px-2.5 py-1 text-[11px] font-medium text-stone-700 bg-white border border-stone-300 rounded hover:bg-stone-100 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="submit"
+                                disabled={!editTitle.trim() || !editStart}
+                                className="px-2.5 py-1 text-[11px] font-semibold text-white bg-stone-900 rounded hover:bg-stone-800 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
+                              >
+                                <Check className="w-3 h-3" />
+                                <span>Save</span>
+                              </button>
+                            </div>
+                          </div>
+                        </form>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={ev.id}
+                        className="py-2 flex items-center justify-between gap-2 text-xs group"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => startEditingEvent(ev)}
+                          className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer rounded hover:bg-stone-50 py-0.5 px-1 -mx-1 transition-colors"
+                          title="Click to revise event"
+                        >
+                          <span
+                            className="w-1.5 h-4 rounded-xs shrink-0"
+                            style={{ backgroundColor: ev.color }}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium text-stone-900 truncate flex items-center gap-1.5">
+                              <span className="truncate">{ev.title}</span>
+                              {ev.fillCell && (
+                                <span
+                                  className="inline-block w-2 h-2 rounded-full shrink-0 border border-stone-300"
+                                  style={{ backgroundColor: ev.color }}
+                                  title="Cell shaded"
+                                />
+                              )}
+                            </div>
+                            <div className="text-[11px] text-stone-500 tabular-nums">
+                              {ev.endDate > ev.startDate
+                                ? `${ev.startDate} → ${ev.endDate}`
+                                : ev.startDate}
+                            </div>
+                          </div>
+                        </button>
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => startEditingEvent(ev)}
+                            aria-label={`Revise ${ev.title}`}
+                            title="Revise event"
+                            className="p-1 text-stone-400 hover:text-stone-900 transition-colors cursor-pointer"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDeleteEvent(ev.id)}
+                            aria-label={`Remove ${ev.title}`}
+                            title="Remove event"
+                            className="p-1 text-stone-400 hover:text-red-700 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteEvent(ev.id)}
-                        aria-label={`Remove ${ev.title}`}
-                        className="p-1 text-stone-400 hover:text-red-700 transition-colors cursor-pointer shrink-0"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </section>

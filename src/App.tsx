@@ -241,6 +241,27 @@ export default function App() {
     }));
   };
 
+  const handleUpdateEvent = (
+    eventId: string,
+    updates: Partial<Omit<CalendarSpanEvent, 'id'>>
+  ) => {
+    setConfig((prev) => ({
+      ...prev,
+      spanEvents: prev.spanEvents.map((item) => {
+        if (item.id !== eventId) return item;
+        const nextStart = updates.startDate ?? item.startDate;
+        const rawEnd = updates.endDate ?? item.endDate;
+        const nextEnd = rawEnd && rawEnd >= nextStart ? rawEnd : nextStart;
+        return {
+          ...item,
+          ...updates,
+          startDate: nextStart,
+          endDate: nextEnd,
+        };
+      }),
+    }));
+  };
+
   const handleClearAllEvents = () => {
     setConfig((prev) => ({ ...prev, spanEvents: [] }));
     setSelectedDateKey(null);
@@ -460,6 +481,7 @@ export default function App() {
           config={config}
           onChange={setConfig}
           onAddEventRange={handleAddEventRange}
+          onUpdateEvent={handleUpdateEvent}
           onDeleteEvent={handleDeleteEvent}
           onClearAllEvents={handleClearAllEvents}
           eventsSyncSlot={
@@ -507,6 +529,7 @@ export default function App() {
             events={selectedDayEvents}
             onClose={() => setSelectedDateKey(null)}
             onAddEventRange={handleAddEventRange}
+            onUpdateEvent={handleUpdateEvent}
             onDeleteEvent={handleDeleteEvent}
           />
         )}
