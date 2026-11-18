@@ -33,6 +33,20 @@ export function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+export function getEventTintOpacity(hex: string): number {
+  const clean = hex.replace('#', '');
+  const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean;
+  const num = parseInt(full, 16);
+  if (Number.isNaN(num)) return 0.16;
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  if (luminance > 0.72) return 0.34;
+  if (luminance > 0.52) return 0.22;
+  return 0.14;
+}
+
 function getFontFamilyForRole(config: CalendarConfig, role: ComputedLabel['fontRole']): string {
   if (role === 'display') return `${config.typography.displayFont}, sans-serif`;
   if (role === 'mono') return `"JetBrains Mono", "Space Mono", monospace`;
@@ -65,6 +79,16 @@ function truncateTextToWidth(
   return lo > 0 ? text.slice(0, lo) + '…' : '';
 }
 
+async function loadLogoImage(dataUrl?: string): Promise<HTMLImageElement | null> {
+  if (!dataUrl) return null;
+  return await new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
 /**
  * Renders the full calendar layout (or a vertical slice starting at offsetYPx) onto a Canvas2D context.
  */
@@ -74,7 +98,8 @@ export function renderCalendarBandToCanvas(
   config: CalendarConfig,
   dpi: number,
   offsetYPx: number,
-  bandHeightPx: number
+  bandHeightPx: number,
+  logoImg?: HTMLImageElement | null
 ) {
   const s = dpi; // 1 inch = dpi pixels
   const bandTopIn = offsetYPx / dpi;
@@ -149,6 +174,35 @@ export function renderCalendarBandToCanvas(
     ctx.fillText(lbl.text, lbl.x * s, lbl.y * s);
   }
 
+  // 4b. Footer Category Key Swatches
+  for (const fk of layout.footerKeyItems) {
+    if (fk.swatchY + fk.swatchSize < bandTopIn || fk.swatchY > bandBottomIn) continue;
+    const sx = fk.swatchX * s;
+    const sy = fk.swatchY * s;
+    const sw = fk.swatchSize * s;
+    ctx.fillStyle = fk.color;
+    ctx.fillRect(sx, sy, sw, sw);
+    ctx.strokeStyle = hexToRgba(config.palette.inkMuted, 0.35);
+    ctx.lineWidth = Math.max(0.75, 0.008 * s);
+    ctx.strokeRect(sx, sy, sw, sw);
+
+    const fontSizePx = fk.fontSizeIn * s;
+    ctx.font = `600 ${fontSizePx}px ${getFontFamilyForRole(config, 'body')}`;
+    ctx.fillStyle = fk.textColor;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    setCanvasLetterSpacing(ctx, 0.03 * fontSizePx);
+    ctx.fillText(fk.label, fk.textX * s, fk.textY * s);
+  }
+
+  // 4c. Header Brand Logo / Graphic
+  if (layout.headerLogo && logoImg) {
+    const hl = layout.headerLogo;
+    if (hl.y + hl.h >= bandTopIn && hl.y <= bandBottomIn) {
+      ctx.drawImage(logoImg, hl.x * s, hl.y * s, hl.w * s, hl.h * s);
+    }
+  }
+
   // 5. Crop Marks
   for (const cm of layout.cropMarks) {
     const minY = Math.min(cm.y1, cm.y2);
@@ -183,7 +237,7 @@ function renderCellToCanvas(
   const filledEvent = cell.events.find((ev) => ev.fillCell);
   const fillHex = filledEvent?.color ?? cell.spanFillColor;
   if (fillHex) {
-    ctx.fillStyle = hexToRgba(fillHex, 0.14);
+    ctx.fillStyle = hexToRgba(fillHex, getEventTintOpacity(fillHex));
     ctx.fillRect(cx, cy, cw, ch);
   }
 
@@ -420,7 +474,7 @@ function renderSpanSegmentToCanvas(
   ctx.clip();
 
   // Opaque blended ribbon backing so vertical cell dividers don't cut through spanning text
-  ctx.fillStyle = blendHexColors(config.palette.paperBg, seg.color, 0.14);
+  ctx.fillStyle = blendHexColors(config.palette.paperBg, seg.color, getEventTintOpacity(seg.color));
   ctx.fillRect(sx, sy, sw, sh);
 
   // Crisp left accent bar
@@ -512,6 +566,7 @@ export async function exportHighResPNG(
   onProgress?: (pct: number, label: string) => void
 ): Promise<Blob> {
   await document.fonts.ready;
+  const logoImg = await loadLogoImage(layout.headerLogo?.dataUrl);
 
   const width = Math.round(layout.totalWidthIn * dpi);
   const height = Math.round(layout.totalHeightIn * dpi);
@@ -542,7 +597,7 @@ export async function exportHighResPNG(
     const writePromise = (async () => {
       for (let y = 0; y < height; y += stripHeight) {
         const curH = Math.min(stripHeight, height - y);
-        renderCalendarBandToCanvas(ctx, layout, config, dpi, y, curH);
+        renderCalendarBandToCanvas(ctx, layout, config, dpi, y, curH, logoImg);
         const imgData = ctx.getImageData(0, 0, width, curH).data;
         const rawBand = new Uint8Array(curH * rowByteLen);
 
@@ -615,7 +670,7 @@ export async function exportHighResPNG(
   canvas.height = height;
   const ctx = canvas.getContext('2d', { alpha: false });
   if (!ctx) throw new Error('Unable to initialize canvas.');
-  renderCalendarBandToCanvas(ctx, layout, config, dpi, 0, height);
+  renderCalendarBandToCanvas(ctx, layout, config, dpi, 0, height, logoImg);
   return await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
@@ -634,6 +689,7 @@ export async function exportPrintPDF(
   onProgress?: (pct: number, label: string) => void
 ): Promise<Blob> {
   await document.fonts.ready;
+  const logoImg = await loadLogoImage(layout.headerLogo?.dataUrl);
 
   const wIn = layout.totalWidthIn;
   const hIn = layout.totalHeightIn;
@@ -657,7 +713,7 @@ export async function exportPrintPDF(
   for (let y = 0; y < heightPx; y += stripHeightPx) {
     const curH = Math.min(stripHeightPx, heightPx - y);
     if (canvas.height !== curH) canvas.height = curH;
-    renderCalendarBandToCanvas(ctx, layout, config, dpi, y, curH);
+    renderCalendarBandToCanvas(ctx, layout, config, dpi, y, curH, logoImg);
 
     const dataUrl = canvas.toDataURL('image/jpeg', 0.96);
     const yIn = y / dpi;
@@ -741,7 +797,7 @@ export function exportVectorSVG(layout: ComputedCalendarLayout, config: Calendar
     const fillHex = filledEvent?.color ?? cell.spanFillColor;
     if (fillHex) {
       parts.push(
-        `<rect x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" width="${cw.toFixed(2)}" height="${ch.toFixed(2)}" fill="${fillHex}" fill-opacity="0.14" />`
+        `<rect x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" width="${cw.toFixed(2)}" height="${ch.toFixed(2)}" fill="${fillHex}" fill-opacity="${getEventTintOpacity(fillHex)}" />`
       );
     }
 
@@ -908,7 +964,11 @@ export function exportVectorSVG(layout: ComputedCalendarLayout, config: Calendar
     const fontSizePt = seg.fontSizeIn * pt;
     const lineHPt = seg.lineHeightIn * pt;
     const bodyFamily = `${config.typography.bodyFont.replace(/"/g, '')}, sans-serif`;
-    const ribbonBg = blendHexColors(config.palette.paperBg, seg.color, 0.14);
+    const ribbonBg = blendHexColors(
+      config.palette.paperBg,
+      seg.color,
+      getEventTintOpacity(seg.color)
+    );
     const textPadX = barW + Math.max(4, fontSizePt * 0.45);
     const totalTextH = seg.lines.length * lineHPt;
     const startY =
@@ -938,6 +998,30 @@ export function exportVectorSVG(layout: ComputedCalendarLayout, config: Calendar
     const base = lbl.baseline === 'top' ? 'hanging' : lbl.baseline === 'bottom' ? 'ideographic' : 'central';
     parts.push(
       `<text x="${(lbl.x * pt).toFixed(2)}" y="${(lbl.y * pt).toFixed(2)}" text-anchor="${anchor}" dominant-baseline="${base}" font-family="${escapeXml(family)}" font-size="${(lbl.fontSizeIn * pt).toFixed(2)}" font-weight="${lbl.fontWeight}" fill="${lbl.color}">${escapeXml(lbl.text)}</text>`
+    );
+  }
+
+  // Footer Category Key Swatches
+  if (layout.footerKeyItems.length > 0) {
+    const bodyFamily = getFontFamilyForRole(config, 'body').replace(/"/g, '');
+    for (const fk of layout.footerKeyItems) {
+      const sx = (fk.swatchX * pt).toFixed(2);
+      const sy = (fk.swatchY * pt).toFixed(2);
+      const sw = (fk.swatchSize * pt).toFixed(2);
+      parts.push(
+        `<rect x="${sx}" y="${sy}" width="${sw}" height="${sw}" fill="${fk.color}" stroke="${config.palette.inkMuted}" stroke-opacity="0.35" stroke-width="0.6" />`
+      );
+      parts.push(
+        `<text x="${(fk.textX * pt).toFixed(2)}" y="${(fk.textY * pt).toFixed(2)}" text-anchor="start" dominant-baseline="central" font-family="${escapeXml(bodyFamily)}" font-size="${(fk.fontSizeIn * pt).toFixed(2)}" font-weight="600" fill="${fk.textColor}">${escapeXml(fk.label)}</text>`
+      );
+    }
+  }
+
+  // Header Brand Logo / Graphic
+  if (layout.headerLogo) {
+    const hl = layout.headerLogo;
+    parts.push(
+      `<image href="${escapeXml(hl.dataUrl)}" x="${(hl.x * pt).toFixed(2)}" y="${(hl.y * pt).toFixed(2)}" width="${(hl.w * pt).toFixed(2)}" height="${(hl.h * pt).toFixed(2)}" preserveAspectRatio="xMidYMid meet" />`
     );
   }
 

@@ -1,3 +1,4 @@
+import { EVENT_COLORS } from '../data/presets';
 import { CalendarConfig, CalendarDayEvent, CalendarSpanEvent } from '../types/calendar';
 import {
   formatDateKey,
@@ -12,6 +13,7 @@ import {
   MONTH_NAMES_SHORT,
   WEEKDAY_NAMES_SHORT,
 } from './calendarMath';
+import { normalizeHex } from './eventPaletteStorage';
 import { measureTextWidthPx, wrapTextToLines } from './textWrap';
 
 export interface ComputedCell {
@@ -91,6 +93,26 @@ export interface ComputedRect {
   strokeWidthIn?: number;
 }
 
+export interface ComputedHeaderLogo {
+  dataUrl: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface ComputedFooterKeyItem {
+  color: string;
+  label: string;
+  swatchX: number;
+  swatchY: number;
+  swatchSize: number;
+  textX: number;
+  textY: number;
+  fontSizeIn: number;
+  textColor: string;
+}
+
 export interface ComputedCalendarLayout {
   totalWidthIn: number;
   totalHeightIn: number;
@@ -103,9 +125,11 @@ export interface ComputedCalendarLayout {
   contentW: number;
   contentH: number;
   strokeWidthIn: number;
+  headerLogo: ComputedHeaderLogo | null;
   rects: ComputedRect[];
   lines: ComputedLine[];
   labels: ComputedLabel[];
+  footerKeyItems: ComputedFooterKeyItem[];
   cells: ComputedCell[];
   spanSegments: ComputedSpanSegment[];
   cropMarks: ComputedLine[];
@@ -190,8 +214,10 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
   const rects: ComputedRect[] = [];
   const lines: ComputedLine[] = [];
   const labels: ComputedLabel[] = [];
+  const footerKeyItems: ComputedFooterKeyItem[] = [];
   const cells: ComputedCell[] = [];
   const cropMarks: ComputedLine[] = [];
+  let headerLogo: ComputedHeaderLogo | null = null;
 
   // Paper background
   rects.push({
@@ -230,12 +256,80 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
     );
   }
 
+  // Prepare footer category key rows early so footer height scales cleanly if wrapped
+  const baseFooterH = config.showFooter ? clamp(trimH * 0.028, 0.35, 0.8) : 0;
+  const footFontSize = clamp(baseFooterH * 0.36, 0.085, 0.17);
+  const leftText = config.footerNote.trim();
+  const keyParts: string[] = [];
+  if (config.showMoonPhases) keyParts.push('● New Moon  ○ Full Moon');
+  if (config.showHolidays) keyParts.push('Holidays Highlighted');
+  const rightText = keyParts.join('   ·   ');
+
+  const rawCategoryKeys: { color: string; label: string; widthIn: number }[] = [];
+  if (config.showFooter && config.showCategoryKey !== false && config.spanEvents.length > 0) {
+    const paletteList = config.eventPalette ?? EVENT_COLORS;
+    const paletteByHex = new Map(paletteList.map((p) => [normalizeHex(p.hex), p]));
+    const seenHex = new Set<string>();
+    const footFontSpec = `600 ${footFontSize * 72}px ${config.typography.bodyFont}, sans-serif`;
+    const swatchSize = footFontSize * 0.96;
+    const swatchTextGap = footFontSize * 0.45;
+
+    for (const ev of config.spanEvents) {
+      const hex = normalizeHex(ev.color);
+      if (seenHex.has(hex)) continue;
+      seenHex.add(hex);
+      const entry = paletteByHex.get(hex);
+      const cat = entry?.category?.trim();
+      if (cat) {
+        const textWIn = measureTextWidthPx(cat, footFontSpec) / 72;
+        rawCategoryKeys.push({
+          color: hex,
+          label: cat,
+          widthIn: swatchSize + swatchTextGap + textWIn,
+        });
+      }
+    }
+  }
+
+  const keyRows: { color: string; label: string; widthIn: number }[][] = [];
+  if (rawCategoryKeys.length > 0) {
+    const footFontSpec = `500 ${footFontSize * 72}px ${config.typography.bodyFont}, sans-serif`;
+    const leftReservedW = leftText
+      ? Math.min(contentW * 0.45, measureTextWidthPx(leftText, footFontSpec) / 72 + 0.42)
+      : 0;
+    const rightReservedW = rightText
+      ? Math.min(contentW * 0.38, measureTextWidthPx(rightText, footFontSpec) / 72 + 0.36)
+      : 0;
+    const itemGap = footFontSize * 1.45;
+
+    let currentRow: { color: string; label: string; widthIn: number }[] = [];
+    let rowLimit = Math.max(2, contentW - leftReservedW - rightReservedW);
+    let cursorW = 0;
+
+    for (const item of rawCategoryKeys) {
+      const needed = currentRow.length === 0 ? item.widthIn : itemGap + item.widthIn;
+      if (currentRow.length > 0 && cursorW + needed > rowLimit) {
+        keyRows.push(currentRow);
+        currentRow = [item];
+        cursorW = item.widthIn;
+        rowLimit = contentW; // Subsequent rows can span full content width
+      } else {
+        currentRow.push(item);
+        cursorW += needed;
+      }
+    }
+    if (currentRow.length > 0) {
+      keyRows.push(currentRow);
+    }
+  }
+
   // Header & Footer vertical allocation
   const headerH = config.showHeader
     ? clamp(trimH * 0.082 * config.typography.titleScale, 0.85, trimH * 0.18)
     : 0;
   const headerGap = config.showHeader ? clamp(trimH * 0.016, 0.18, 0.5) : 0;
-  const footerH = config.showFooter ? clamp(trimH * 0.028, 0.35, 0.8) : 0;
+  const extraRows = Math.max(0, keyRows.length - 1);
+  const footerH = config.showFooter ? baseFooterH + extraRows * (footFontSize * 1.85) : 0;
   const footerGap = config.showFooter ? clamp(trimH * 0.012, 0.14, 0.36) : 0;
 
   if (config.showHeader) {
@@ -245,12 +339,37 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
     const titleText = config.title.trim() || defaultYearTitle;
     const subText = config.subtitle.trim();
 
+    const logoCfg = config.headerLogo?.dataUrl ? config.headerLogo : null;
+    const logoGap = clamp(headerH * 0.18, 0.15, 0.38);
+    if (logoCfg) {
+      const safeRatio = clamp(logoCfg.aspectRatio || 1, 0.15, 8);
+      const targetH = clamp(headerH * 0.68 * clamp(logoCfg.scale ?? 1, 0.4, 1.4), 0.25, headerH * 0.9);
+      const maxLogoW = contentW * 0.26;
+      const logoW = Math.min(maxLogoW, targetH * safeRatio);
+      const logoH = logoW / safeRatio;
+      const logoX =
+        logoCfg.position === 'right'
+          ? contentX + contentW - logoW
+          : contentX;
+      const logoY = contentY + (headerH - logoH) * 0.5;
+      headerLogo = {
+        dataUrl: logoCfg.dataUrl,
+        x: logoX,
+        y: logoY,
+        w: logoW,
+        h: logoH,
+      };
+    }
+
+    const leftInset = headerLogo && config.headerLogo?.position === 'left' ? headerLogo.w + logoGap : 0;
+    const rightInset = headerLogo && config.headerLogo?.position === 'right' ? headerLogo.w + logoGap : 0;
+
     if (config.headerAlign === 'split') {
       labels.push({
         text: titleText,
-        x: contentX,
+        x: contentX + leftInset,
         y: contentY + headerH * 0.5,
-        w: contentW * 0.65,
+        w: Math.max(2, contentW * 0.65 - leftInset),
         h: headerH,
         align: 'left',
         baseline: 'middle',
@@ -263,9 +382,9 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
       if (subText) {
         labels.push({
           text: subText,
-          x: contentX + contentW,
+          x: contentX + contentW - rightInset,
           y: contentY + headerH * 0.54,
-          w: contentW * 0.35,
+          w: Math.max(2, contentW * 0.35 - rightInset),
           h: headerH,
           align: 'right',
           baseline: 'middle',
@@ -281,7 +400,7 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
         text: titleText,
         x: contentX + contentW * 0.5,
         y: contentY + (subText ? headerH * 0.38 : headerH * 0.5),
-        w: contentW,
+        w: Math.max(2, contentW - leftInset - rightInset),
         h: headerH * 0.7,
         align: 'center',
         baseline: 'middle',
@@ -296,7 +415,7 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
           text: subText,
           x: contentX + contentW * 0.5,
           y: contentY + headerH * 0.84,
-          w: contentW,
+          w: Math.max(2, contentW - leftInset - rightInset),
           h: headerH * 0.25,
           align: 'center',
           baseline: 'middle',
@@ -311,9 +430,9 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
       // left
       labels.push({
         text: titleText,
-        x: contentX,
+        x: contentX + leftInset,
         y: contentY + (subText ? headerH * 0.38 : headerH * 0.5),
-        w: contentW,
+        w: Math.max(2, contentW - leftInset - rightInset),
         h: headerH * 0.7,
         align: 'left',
         baseline: 'middle',
@@ -326,9 +445,9 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
       if (subText) {
         labels.push({
           text: subText,
-          x: contentX,
+          x: contentX + leftInset,
           y: contentY + headerH * 0.84,
-          w: contentW,
+          w: Math.max(2, contentW - leftInset - rightInset),
           h: headerH * 0.25,
           align: 'left',
           baseline: 'middle',
@@ -375,45 +494,44 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
   // Footer
   if (config.showFooter) {
     const footerY = contentY + contentH - footerH;
-    const footFontSize = clamp(footerH * 0.36, 0.085, 0.17);
-    const yearRangeLabel = config.schoolYear ? `${config.year}–${config.year + 1}` : String(config.year);
-    const leftText = config.footerNote.trim() || `${yearRangeLabel} · ${trimW}" × ${trimH}"`;
-    const keyParts: string[] = [];
-    if (config.showMoonPhases) keyParts.push('● New Moon  ○ Full Moon');
-    if (config.showHolidays) keyParts.push('Holidays Highlighted');
-    const rightText = keyParts.join('   ·   ');
+    const firstRowY = footerY + baseFooterH * 0.62;
+    const rowStepY = footFontSize * 1.85;
 
-    lines.push({
-      x1: contentX,
-      y1: footerY + footerH * 0.15,
-      x2: contentX + contentW,
-      y2: footerY + footerH * 0.15,
-      widthIn: Math.max(0.01, strokeWidthIn),
-      color: config.palette.gridRule,
-    });
+    if (leftText || rightText || keyRows.length > 0) {
+      lines.push({
+        x1: contentX,
+        y1: footerY + baseFooterH * 0.15,
+        x2: contentX + contentW,
+        y2: footerY + baseFooterH * 0.15,
+        widthIn: Math.max(0.01, strokeWidthIn),
+        color: config.palette.gridRule,
+      });
+    }
 
-    labels.push({
-      text: leftText,
-      x: contentX,
-      y: footerY + footerH * 0.62,
-      w: contentW * 0.6,
-      h: footerH * 0.7,
-      align: 'left',
-      baseline: 'middle',
-      fontRole: 'body',
-      fontSizeIn: footFontSize,
-      fontWeight: 500,
-      color: config.palette.inkMuted,
-      letterSpacingEm: 0.1 * config.typography.letterSpacingScale,
-    });
+    if (leftText) {
+      labels.push({
+        text: leftText,
+        x: contentX,
+        y: firstRowY,
+        w: contentW * 0.45,
+        h: baseFooterH * 0.7,
+        align: 'left',
+        baseline: 'middle',
+        fontRole: 'body',
+        fontSizeIn: footFontSize,
+        fontWeight: 500,
+        color: config.palette.inkMuted,
+        letterSpacingEm: 0.1 * config.typography.letterSpacingScale,
+      });
+    }
 
     if (rightText) {
       labels.push({
         text: rightText,
         x: contentX + contentW,
-        y: footerY + footerH * 0.62,
-        w: contentW * 0.4,
-        h: footerH * 0.7,
+        y: firstRowY,
+        w: contentW * 0.38,
+        h: baseFooterH * 0.7,
         align: 'right',
         baseline: 'middle',
         fontRole: 'body',
@@ -421,6 +539,35 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
         fontWeight: 500,
         color: config.palette.inkMuted,
         letterSpacingEm: 0.06 * config.typography.letterSpacingScale,
+      });
+    }
+
+    if (keyRows.length > 0) {
+      const footFontSpec = `500 ${footFontSize * 72}px ${config.typography.bodyFont}, sans-serif`;
+      const leftReservedW = leftText
+        ? Math.min(contentW * 0.45, measureTextWidthPx(leftText, footFontSpec) / 72 + 0.42)
+        : 0;
+      const swatchSize = footFontSize * 0.96;
+      const swatchTextGap = footFontSize * 0.45;
+      const itemGap = footFontSize * 1.45;
+
+      keyRows.forEach((row, rIdx) => {
+        let cursorX = rIdx === 0 ? contentX + leftReservedW : contentX;
+        const rowCenterY = firstRowY + rIdx * rowStepY;
+        for (const item of row) {
+          footerKeyItems.push({
+            color: item.color,
+            label: item.label,
+            swatchX: cursorX,
+            swatchY: rowCenterY - swatchSize * 0.5,
+            swatchSize,
+            textX: cursorX + swatchSize + swatchTextGap,
+            textY: rowCenterY,
+            fontSizeIn: footFontSize,
+            textColor: config.palette.inkPrimary,
+          });
+          cursorX += item.widthIn + itemGap;
+        }
       });
     }
   }
@@ -437,9 +584,11 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
     contentW,
     contentH,
     strokeWidthIn,
+    headerLogo,
     rects,
     lines,
     labels,
+    footerKeyItems,
     cells,
     spanSegments,
     cropMarks,

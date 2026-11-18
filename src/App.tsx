@@ -36,6 +36,13 @@ import {
   parseICSToSpanEvents,
 } from './utils/icalendar';
 import {
+  ensureColorInPalette,
+  loadUserEventPalette,
+  mergeWithDefaultPalette,
+  normalizeHex,
+  saveUserEventPalette,
+} from './utils/eventPaletteStorage';
+import {
   deleteCalendarSnapshot,
   downloadProjectJson,
   loadSavedSnapshots,
@@ -46,7 +53,9 @@ import {
 
 const STORAGE_KEY = 'broadsheet_studio_config_v1';
 const LEGACY_DEFAULTS_CLEANED_KEY = 'broadsheet_defaults_removed_v1';
+const LEGACY_FOOTER_CLEANED_KEY = 'broadsheet_footer_print_note_removed_v1';
 const LEGACY_SAMPLE_IDS = new Set(['sample-1', 'sample-2', 'sample-3']);
+const LEGACY_DEFAULT_FOOTER = 'PRINTED AT ARCHIVAL SCALE · 40 × 28 IN';
 
 function migrateLegacyEvents(
   legacy: Record<string, CalendarDayEvent[]> | undefined
@@ -85,9 +94,23 @@ function loadInitialConfig(): CalendarConfig {
       localStorage.setItem(LEGACY_DEFAULTS_CLEANED_KEY, '1');
     }
 
+    let footerNote = typeof parsed.footerNote === 'string' ? parsed.footerNote : DEFAULT_CONFIG.footerNote;
+    if (!localStorage.getItem(LEGACY_FOOTER_CLEANED_KEY)) {
+      if (footerNote === LEGACY_DEFAULT_FOOTER) {
+        footerNote = '';
+      }
+      localStorage.setItem(LEGACY_FOOTER_CLEANED_KEY, '1');
+    }
+
+    const userPalette = loadUserEventPalette();
+    const mergedPalette = mergeWithDefaultPalette(
+      parsed.eventPalette && parsed.eventPalette.length > 0 ? parsed.eventPalette : userPalette
+    );
+
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
+      footerNote,
       typography: {
         ...DEFAULT_CONFIG.typography,
         ...(parsed.typography ?? {}),
@@ -96,11 +119,16 @@ function loadInitialConfig(): CalendarConfig {
         ...DEFAULT_CONFIG.palette,
         ...(parsed.palette ?? {}),
       },
+      eventPalette: mergedPalette,
+      showCategoryKey: parsed.showCategoryKey ?? true,
       spanEvents,
       events: undefined,
     };
   } catch {
-    return DEFAULT_CONFIG;
+    return {
+      ...DEFAULT_CONFIG,
+      eventPalette: loadUserEventPalette(),
+    };
   }
 }
 
@@ -219,19 +247,28 @@ export default function App() {
   ) => {
     const normalizedEnd = endKey && endKey >= startKey ? endKey : startKey;
     const id = `ev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const normalizedColor = normalizeHex(ev.color);
     const newSpan: CalendarSpanEvent = {
       id,
       title: ev.title,
       startDate: startKey,
       endDate: normalizedEnd,
-      color: ev.color,
+      color: normalizedColor,
       fillCell: ev.fillCell,
     };
 
-    setConfig((prev) => ({
-      ...prev,
-      spanEvents: [...prev.spanEvents, newSpan],
-    }));
+    setConfig((prev) => {
+      const curPalette = prev.eventPalette ?? loadUserEventPalette();
+      const { nextPalette, added } = ensureColorInPalette(curPalette, normalizedColor);
+      if (added) {
+        saveUserEventPalette(nextPalette);
+      }
+      return {
+        ...prev,
+        eventPalette: nextPalette,
+        spanEvents: [...prev.spanEvents, newSpan],
+      };
+    });
   };
 
   const handleDeleteEvent = (eventId: string) => {
@@ -245,21 +282,65 @@ export default function App() {
     eventId: string,
     updates: Partial<Omit<CalendarSpanEvent, 'id'>>
   ) => {
-    setConfig((prev) => ({
-      ...prev,
-      spanEvents: prev.spanEvents.map((item) => {
-        if (item.id !== eventId) return item;
-        const nextStart = updates.startDate ?? item.startDate;
-        const rawEnd = updates.endDate ?? item.endDate;
-        const nextEnd = rawEnd && rawEnd >= nextStart ? rawEnd : nextStart;
-        return {
-          ...item,
-          ...updates,
-          startDate: nextStart,
-          endDate: nextEnd,
-        };
-      }),
-    }));
+    setConfig((prev) => {
+      let nextPalette = prev.eventPalette ?? loadUserEventPalette();
+      if (updates.color) {
+        const res = ensureColorInPalette(nextPalette, updates.color);
+        nextPalette = res.nextPalette;
+        if (res.added) {
+          saveUserEventPalette(nextPalette);
+        }
+      }
+      return {
+        ...prev,
+        eventPalette: nextPalette,
+        spanEvents: prev.spanEvents.map((item) => {
+          if (item.id !== eventId) return item;
+          const nextStart = updates.startDate ?? item.startDate;
+          const rawEnd = updates.endDate ?? item.endDate;
+          const nextEnd = rawEnd && rawEnd >= nextStart ? rawEnd : nextStart;
+          return {
+            ...item,
+            ...updates,
+            color: updates.color ? normalizeHex(updates.color) : item.color,
+            startDate: nextStart,
+            endDate: nextEnd,
+          };
+        }),
+      };
+    });
+  };
+
+  const handleUpdateShadeCategory = (hex: string, category: string) => {
+    const norm = normalizeHex(hex);
+    setConfig((prev) => {
+      const curPalette = prev.eventPalette ?? loadUserEventPalette();
+      const { nextPalette } = ensureColorInPalette(curPalette, norm, category);
+      saveUserEventPalette(nextPalette);
+      return { ...prev, eventPalette: nextPalette };
+    });
+  };
+
+  const handleAddCustomShadeColor = (hex: string, category?: string) => {
+    const norm = normalizeHex(hex);
+    setConfig((prev) => {
+      const curPalette = prev.eventPalette ?? loadUserEventPalette();
+      const { nextPalette } = ensureColorInPalette(curPalette, norm, category);
+      saveUserEventPalette(nextPalette);
+      return { ...prev, eventPalette: nextPalette };
+    });
+  };
+
+  const handleDeleteCustomShadeColor = (hex: string) => {
+    const norm = normalizeHex(hex);
+    setConfig((prev) => {
+      const curPalette = prev.eventPalette ?? loadUserEventPalette();
+      const nextPalette = curPalette.filter(
+        (c) => !(c.isCustom && normalizeHex(c.hex) === norm)
+      );
+      saveUserEventPalette(nextPalette);
+      return { ...prev, eventPalette: nextPalette };
+    });
   };
 
   const handleClearAllEvents = () => {
@@ -275,7 +356,16 @@ export default function App() {
   };
 
   const handleLoadSnapshot = (snap: SavedCalendarSnapshot) => {
-    setConfig(snap.config);
+    const mergedPalette = mergeWithDefaultPalette(
+      snap.config.eventPalette && snap.config.eventPalette.length > 0
+        ? snap.config.eventPalette
+        : loadUserEventPalette()
+    );
+    setConfig({
+      ...snap.config,
+      eventPalette: mergedPalette,
+      showCategoryKey: snap.config.showCategoryKey ?? true,
+    });
     setSelectedDateKey(null);
   };
 
@@ -287,7 +377,16 @@ export default function App() {
     try {
       const text = await file.text();
       const restored = parseProjectJson(text);
-      setConfig(restored);
+      const mergedPalette = mergeWithDefaultPalette(
+        restored.eventPalette && restored.eventPalette.length > 0
+          ? restored.eventPalette
+          : loadUserEventPalette()
+      );
+      setConfig({
+        ...restored,
+        eventPalette: mergedPalette,
+        showCategoryKey: restored.showCategoryKey ?? true,
+      });
       setSelectedDateKey(null);
       setIcsStatus(`Restored project from ${file.name}`);
     } catch (err: unknown) {
@@ -484,6 +583,9 @@ export default function App() {
           onUpdateEvent={handleUpdateEvent}
           onDeleteEvent={handleDeleteEvent}
           onClearAllEvents={handleClearAllEvents}
+          onUpdateShadeCategory={handleUpdateShadeCategory}
+          onAddCustomShadeColor={handleAddCustomShadeColor}
+          onDeleteCustomShadeColor={handleDeleteCustomShadeColor}
           eventsSyncSlot={
             <EventsSyncPanel
               config={config}
@@ -527,6 +629,7 @@ export default function App() {
           <DayEventEditor
             dateKey={selectedDateKey}
             events={selectedDayEvents}
+            eventPalette={config.eventPalette ?? loadUserEventPalette()}
             onClose={() => setSelectedDateKey(null)}
             onAddEventRange={handleAddEventRange}
             onUpdateEvent={handleUpdateEvent}

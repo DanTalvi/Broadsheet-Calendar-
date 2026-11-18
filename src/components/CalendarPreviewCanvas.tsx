@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Maximize2, Minus, Plus, Eye } from 'lucide-react';
 import { CalendarConfig } from '../types/calendar';
 import { ComputedCalendarLayout } from '../utils/calendarLayout';
-import { blendHexColors, hexToRgba } from '../utils/canvasRenderer';
+import { blendHexColors, getEventTintOpacity, hexToRgba } from '../utils/canvasRenderer';
 import { measureTextWidthPx, wrapTextToLines } from '../utils/textWrap';
 
 interface CalendarPreviewCanvasProps {
@@ -293,7 +293,7 @@ export function CalendarPreviewCanvas({
                     y={cy}
                     width={cw}
                     height={ch}
-                    fill={fillHex ? hexToRgba(fillHex, 0.14) : 'transparent'}
+                    fill={fillHex ? hexToRgba(fillHex, getEventTintOpacity(fillHex)) : 'transparent'}
                   />
                   <rect
                     x={cx}
@@ -600,7 +600,11 @@ export function CalendarPreviewCanvas({
               const barW = Math.max(1.8, 0.03 * pt);
               const fontSizePt = seg.fontSizeIn * pt;
               const lineHPt = seg.lineHeightIn * pt;
-              const ribbonBg = blendHexColors(config.palette.paperBg, seg.color, 0.14);
+              const ribbonBg = blendHexColors(
+                config.palette.paperBg,
+                seg.color,
+                getEventTintOpacity(seg.color)
+              );
               const textPadX = barW + Math.max(4, fontSizePt * 0.45);
               const totalTextH = seg.lines.length * lineHPt;
               const startY =
@@ -668,6 +672,46 @@ export function CalendarPreviewCanvas({
                 </text>
               );
             })}
+
+            {/* Footer Shade Category Key */}
+            {layout.footerKeyItems.map((fk, idx) => (
+              <g key={`fk-${idx}`}>
+                <rect
+                  x={fk.swatchX * pt}
+                  y={fk.swatchY * pt}
+                  width={fk.swatchSize * pt}
+                  height={fk.swatchSize * pt}
+                  fill={fk.color}
+                  stroke={config.palette.inkMuted}
+                  strokeOpacity={0.35}
+                  strokeWidth={0.6}
+                />
+                <text
+                  x={fk.textX * pt}
+                  y={fk.textY * pt}
+                  textAnchor="start"
+                  dominantBaseline="central"
+                  fontFamily={bodyFamily}
+                  fontSize={fk.fontSizeIn * pt}
+                  fontWeight={600}
+                  fill={fk.textColor}
+                >
+                  {fk.label}
+                </text>
+              </g>
+            ))}
+
+            {/* Header Brand Logo / Graphic */}
+            {layout.headerLogo && (
+              <image
+                href={layout.headerLogo.dataUrl}
+                x={layout.headerLogo.x * pt}
+                y={layout.headerLogo.y * pt}
+                width={layout.headerLogo.w * pt}
+                height={layout.headerLogo.h * pt}
+                preserveAspectRatio="xMidYMid meet"
+              />
+            )}
 
             {/* Crop Marks */}
             {layout.cropMarks.map((cm, idx) => (

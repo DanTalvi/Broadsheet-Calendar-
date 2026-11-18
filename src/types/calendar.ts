@@ -10,8 +10,25 @@ export type GridStrokeWeight = 'none' | 'hairline' | 'crisp' | 'bold';
 export type MonthCaseStyle = 'uppercase' | 'title' | 'abbr-upper';
 export type DayNumberAlign = 'top-left' | 'top-right' | 'center';
 export type HeaderAlign = 'left' | 'center' | 'split';
+export type HeaderLogoPosition = 'left' | 'right';
 export type ExportFormat = 'png' | 'pdf' | 'svg';
 export type InspectorSection = 'layout' | 'typography' | 'palette' | 'events';
+
+export interface HeaderLogoConfig {
+  dataUrl: string;
+  fileName: string;
+  aspectRatio: number;
+  position: HeaderLogoPosition;
+  scale: number;
+}
+
+export interface EventColorItem {
+  id: string;
+  label: string;
+  hex: string;
+  category?: string;
+  isCustom?: boolean;
+}
 
 export interface FontOption {
   id: string;
@@ -81,6 +98,7 @@ export interface CalendarConfig {
   subtitle: string;
   footerNote: string;
   headerAlign: HeaderAlign;
+  headerLogo?: HeaderLogoConfig | null;
   showHeader: boolean;
   showFooter: boolean;
   weekStart: 0 | 1;
@@ -99,6 +117,8 @@ export interface CalendarConfig {
   weekendTintStrength: number;
   typography: TypographyConfig;
   palette: ColorPalette;
+  eventPalette?: EventColorItem[];
+  showCategoryKey?: boolean;
   spanEvents: CalendarSpanEvent[];
   events?: Record<string, CalendarDayEvent[]>;
 }

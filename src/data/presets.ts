@@ -1,4 +1,4 @@
-import { CalendarConfig, ColorPalette, FontOption, LayoutArchetype, PaperSizePreset } from '../types/calendar';
+import { CalendarConfig, ColorPalette, EventColorItem, FontOption, LayoutArchetype, PaperSizePreset } from '../types/calendar';
 
 export const DISPLAY_FONTS: FontOption[] = [
   { id: 'big-shoulders', label: 'Big Shoulders Display', family: '"Big Shoulders Display"', category: 'condensed', weight: 700 },
@@ -200,13 +200,22 @@ export const COLOR_PALETTES: ColorPalette[] = [
   },
 ];
 
-export const EVENT_COLORS = [
+export const EVENT_COLORS: EventColorItem[] = [
   { id: 'crimson', label: 'Vermilion', hex: '#DC2626' },
   { id: 'cobalt', label: 'Cobalt', hex: '#1D4ED8' },
-  { id: 'amber', label: 'Ochre', hex: '#D97706' },
   { id: 'emerald', label: 'Forest', hex: '#15803D' },
+  { id: 'amber', label: 'Ochre', hex: '#D97706' },
   { id: 'plum', label: 'Burgundy', hex: '#881337' },
   { id: 'charcoal', label: 'Charcoal', hex: '#27272A' },
+  { id: 'sunflower', label: 'Sunflower Yellow', hex: '#EAB308' },
+  { id: 'teal', label: 'Teal', hex: '#0D9488' },
+  { id: 'iris', label: 'Iris', hex: '#7C3AED' },
+  { id: 'pastel-yellow', label: 'Butter Yellow', hex: '#FDE047' },
+  { id: 'pastel-rose', label: 'Blush Rose', hex: '#F9A8D4' },
+  { id: 'pastel-sky', label: 'Sky Pastel', hex: '#93C5FD' },
+  { id: 'pastel-mint', label: 'Mint Pastel', hex: '#86EFAC' },
+  { id: 'pastel-lavender', label: 'Lavender Pastel', hex: '#DDD6FE' },
+  { id: 'pastel-peach', label: 'Peach Pastel', hex: '#FDBA74' },
 ];
 
 export const DEFAULT_CONFIG: CalendarConfig = {
@@ -214,7 +223,7 @@ export const DEFAULT_CONFIG: CalendarConfig = {
   schoolYear: false,
   title: '2027',
   subtitle: 'ANNUAL WALL PLANNER',
-  footerNote: 'PRINTED AT ARCHIVAL SCALE · 40 × 28 IN',
+  footerNote: '',
   headerAlign: 'split',
   showHeader: true,
   showFooter: true,
@@ -246,5 +255,7 @@ export const DEFAULT_CONFIG: CalendarConfig = {
     letterSpacingScale: 1.0,
   },
   palette: COLOR_PALETTES[0],
+  eventPalette: EVENT_COLORS,
+  showCategoryKey: true,
   spanEvents: [],
 };

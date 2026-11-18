@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   Check,
   ChevronLeft,
   ChevronRight,
+  ImagePlus,
   Pencil,
   Plus,
   Search,
@@ -25,9 +26,52 @@ import {
   DayNumberAlign,
   GridStrokeWeight,
   HeaderAlign,
+  HeaderLogoPosition,
   InspectorSection,
   MonthCaseStyle,
 } from '../types/calendar';
+import { ShadeCategoriesSection } from './ShadeCategoriesSection';
+
+async function readBrandLogoFile(file: File): Promise<{
+  dataUrl: string;
+  aspectRatio: number;
+}> {
+  const rawDataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read image file.'));
+    reader.readAsDataURL(file);
+  });
+
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error('Unsupported or unreadable image file.'));
+    el.src = rawDataUrl;
+  });
+
+  const w = img.naturalWidth || 100;
+  const h = img.naturalHeight || 100;
+  const aspectRatio = Math.max(0.15, Math.min(8, w / h));
+
+  // Keep SVGs or reasonably sized raster files verbatim for crisp 300 DPI output
+  if (file.type === 'image/svg+xml' || rawDataUrl.length <= 1_400_000) {
+    return { dataUrl: rawDataUrl, aspectRatio };
+  }
+
+  // Downscale oversized raster files so localStorage persistence stays reliable
+  const maxDim = 1800;
+  const ratio = Math.min(maxDim / w, maxDim / h, 1);
+  const targetW = Math.max(1, Math.round(w * ratio));
+  const targetH = Math.max(1, Math.round(h * ratio));
+  const canvas = document.createElement('canvas');
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return { dataUrl: rawDataUrl, aspectRatio };
+  ctx.drawImage(img, 0, 0, targetW, targetH);
+  return { dataUrl: canvas.toDataURL('image/png'), aspectRatio };
+}
 
 interface InspectorPanelProps {
   activeSection: InspectorSection;
@@ -37,6 +81,9 @@ interface InspectorPanelProps {
   onUpdateEvent: (eventId: string, updates: Partial<Omit<CalendarSpanEvent, 'id'>>) => void;
   onDeleteEvent: (eventId: string) => void;
   onClearAllEvents: () => void;
+  onUpdateShadeCategory: (hex: string, category: string) => void;
+  onAddCustomShadeColor: (hex: string, category?: string) => void;
+  onDeleteCustomShadeColor: (hex: string) => void;
   eventsSyncSlot?: React.ReactNode;
 }
 
@@ -48,6 +95,9 @@ export function InspectorPanel({
   onUpdateEvent,
   onDeleteEvent,
   onClearAllEvents,
+  onUpdateShadeCategory,
+  onAddCustomShadeColor,
+  onDeleteCustomShadeColor,
   eventsSyncSlot,
 }: InspectorPanelProps) {
   const [newStart, setNewStart] = useState(`${config.year}-05-10`);
@@ -63,6 +113,31 @@ export function InspectorPanel({
   const [editEnd, setEditEnd] = useState('');
   const [editColor, setEditColor] = useState(EVENT_COLORS[0].hex);
   const [editFillCell, setEditFillCell] = useState(false);
+
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const [logoError, setLogoError] = useState<string | null>(null);
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setLogoError(null);
+    try {
+      const { dataUrl, aspectRatio } = await readBrandLogoFile(file);
+      onChange((prev) => ({
+        ...prev,
+        headerLogo: {
+          dataUrl,
+          fileName: file.name,
+          aspectRatio,
+          position: prev.headerLogo?.position ?? 'left',
+          scale: prev.headerLogo?.scale ?? 1.0,
+        },
+      }));
+    } catch (err: unknown) {
+      setLogoError(err instanceof Error ? err.message : 'Unable to load logo graphic.');
+    }
+  };
 
   const updateYear = (nextYear: number) => {
     const clamped = Math.max(2020, Math.min(2040, nextYear));
@@ -496,6 +571,139 @@ export function InspectorPanel({
                       </button>
                     ))}
                   </div>
+
+                  {/* Brand Logo / Graphic */}
+                  <div className="pt-2 space-y-2 border-t border-stone-100">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium text-stone-600">
+                        Header Brand Logo / Graphic
+                      </span>
+                      {config.headerLogo?.dataUrl && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onChange((p) => ({ ...p, headerLogo: null }))
+                          }
+                          className="text-[11px] text-red-700 hover:underline cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+
+                    <input
+                      ref={logoInputRef}
+                      type="file"
+                      accept=".png,.jpg,.jpeg,.webp,.svg,image/*"
+                      onChange={handleLogoUpload}
+                      className="hidden"
+                    />
+
+                    {!config.headerLogo?.dataUrl ? (
+                      <button
+                        type="button"
+                        onClick={() => logoInputRef.current?.click()}
+                        className="w-full py-2 px-3 text-xs font-medium text-stone-700 bg-stone-50 border border-dashed border-stone-300 rounded-md hover:border-stone-900 hover:text-stone-900 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <ImagePlus className="w-3.5 h-3.5" />
+                        <span>Upload Logo (PNG, SVG, JPG)</span>
+                      </button>
+                    ) : (
+                      <div className="space-y-2.5 p-2.5 bg-stone-50 border border-stone-200 rounded-md">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-9 h-9 rounded border border-stone-200 bg-white flex items-center justify-center p-1 shrink-0 overflow-hidden">
+                              <img
+                                src={config.headerLogo.dataUrl}
+                                alt="Header brand logo preview"
+                                className="max-w-full max-h-full object-contain"
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-stone-900 truncate">
+                                {config.headerLogo.fileName}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => logoInputRef.current?.click()}
+                                className="text-[11px] text-stone-600 hover:text-stone-900 underline cursor-pointer"
+                              >
+                                Replace file
+                              </button>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => onChange((p) => ({ ...p, headerLogo: null }))}
+                            aria-label="Remove header logo"
+                            className="p-1 text-stone-400 hover:text-red-700 transition-colors cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1 p-1 bg-stone-200/70 rounded">
+                          {([
+                            { id: 'left' as HeaderLogoPosition, label: 'Left Side' },
+                            { id: 'right' as HeaderLogoPosition, label: 'Right Side' },
+                          ]).map((pos) => (
+                            <button
+                              key={pos.id}
+                              type="button"
+                              onClick={() =>
+                                onChange((p) =>
+                                  p.headerLogo
+                                    ? { ...p, headerLogo: { ...p.headerLogo, position: pos.id } }
+                                    : p
+                                )
+                              }
+                              className={`flex-1 py-1 text-[11px] font-medium rounded transition-colors cursor-pointer ${
+                                config.headerLogo?.position === pos.id
+                                  ? 'bg-white text-stone-900 shadow-sm'
+                                  : 'text-stone-600 hover:text-stone-900'
+                              }`}
+                            >
+                              {pos.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-[11px] text-stone-600 mb-1">
+                            <span>Logo Size</span>
+                            <span className="tabular-nums font-medium">
+                              {Math.round((config.headerLogo.scale ?? 1) * 100)}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0.4}
+                            max={1.4}
+                            step={0.05}
+                            value={config.headerLogo.scale ?? 1}
+                            onChange={(e) =>
+                              onChange((p) =>
+                                p.headerLogo
+                                  ? {
+                                      ...p,
+                                      headerLogo: {
+                                        ...p.headerLogo,
+                                        scale: Number(e.target.value),
+                                      },
+                                    }
+                                  : p
+                              )
+                            }
+                            className="w-full accent-stone-900 cursor-pointer"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {logoError && (
+                      <p className="text-[11px] text-red-700">{logoError}</p>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -862,6 +1070,20 @@ export function InspectorPanel({
                 ))}
               </div>
             </section>
+
+            <hr className="border-stone-200" />
+
+            <ShadeCategoriesSection
+              eventPalette={config.eventPalette ?? EVENT_COLORS}
+              spanEvents={config.spanEvents}
+              showCategoryKey={config.showCategoryKey !== false}
+              onToggleShowCategoryKey={(val) =>
+                onChange((p) => ({ ...p, showCategoryKey: val }))
+              }
+              onUpdateCategory={onUpdateShadeCategory}
+              onAddCustomColor={onAddCustomShadeColor}
+              onDeleteCustomColor={onDeleteCustomShadeColor}
+            />
           </>
         )}
 
@@ -904,15 +1126,16 @@ export function InspectorPanel({
                   </label>
                 </div>
 
-                <div className="flex items-center justify-between pt-0.5">
-                  <div className="flex items-center gap-1.5">
-                    {EVENT_COLORS.map((c) => (
+                <div className="space-y-2 pt-0.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(config.eventPalette ?? EVENT_COLORS).map((c) => (
                       <button
                         key={c.id}
                         type="button"
                         onClick={() => setNewColor(c.hex)}
-                        aria-label={c.label}
-                        className={`w-5 h-5 rounded-sm transition-transform cursor-pointer ${
+                        aria-label={c.category ? `${c.category} (${c.label})` : c.label}
+                        title={c.category ? `${c.category} (${c.label})` : c.label}
+                        className={`w-5 h-5 rounded-sm border border-stone-300/80 transition-transform cursor-pointer ${
                           newColor.toLowerCase() === c.hex.toLowerCase()
                             ? 'ring-2 ring-offset-1 ring-stone-900 scale-110'
                             : ''
@@ -921,8 +1144,8 @@ export function InspectorPanel({
                       />
                     ))}
                     <label
-                      title="Custom highlight color"
-                      className="w-5 h-5 rounded-sm border border-stone-300 overflow-hidden cursor-pointer flex items-center justify-center bg-white"
+                      title="Pick custom color (auto-saved to palette on add)"
+                      className="w-5 h-5 rounded-sm border border-stone-400 overflow-hidden cursor-pointer flex items-center justify-center bg-white"
                       style={{ backgroundColor: newColor }}
                     >
                       <input
@@ -934,15 +1157,26 @@ export function InspectorPanel({
                       />
                     </label>
                   </div>
-                  <label className="flex items-center gap-1.5 text-[11px] text-stone-600 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={newFillCell}
-                      onChange={(e) => setNewFillCell(e.target.checked)}
-                      className="accent-stone-900"
-                    />
-                    <span>Shade cell</span>
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-stone-500 truncate pr-2">
+                      {(() => {
+                        const match = (config.eventPalette ?? EVENT_COLORS).find(
+                          (c) => c.hex.toLowerCase() === newColor.toLowerCase()
+                        );
+                        if (!match) return `Custom ${newColor.toUpperCase()} (saves on add)`;
+                        return match.category ? `${match.category} · ${match.label}` : match.label;
+                      })()}
+                    </span>
+                    <label className="flex items-center gap-1.5 text-[11px] text-stone-600 cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={newFillCell}
+                        onChange={(e) => setNewFillCell(e.target.checked)}
+                        className="accent-stone-900"
+                      />
+                      <span>Shade cell</span>
+                    </label>
+                  </div>
                 </div>
 
                 <button
@@ -1068,15 +1302,16 @@ export function InspectorPanel({
                             </label>
                           </div>
 
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1">
-                              {EVENT_COLORS.map((c) => (
+                          <div className="space-y-1.5">
+                            <div className="flex flex-wrap items-center gap-1">
+                              {(config.eventPalette ?? EVENT_COLORS).map((c) => (
                                 <button
                                   key={c.id}
                                   type="button"
                                   onClick={() => setEditColor(c.hex)}
-                                  aria-label={`Set color ${c.label}`}
-                                  className={`w-4 h-4 rounded-sm transition-transform cursor-pointer ${
+                                  aria-label={c.category ? `${c.category} (${c.label})` : `Set color ${c.label}`}
+                                  title={c.category ? `${c.category} (${c.label})` : c.label}
+                                  className={`w-4 h-4 rounded-sm border border-stone-300/80 transition-transform cursor-pointer ${
                                     editColor.toLowerCase() === c.hex.toLowerCase()
                                       ? 'ring-2 ring-offset-1 ring-stone-900 scale-110'
                                       : ''
@@ -1085,7 +1320,7 @@ export function InspectorPanel({
                                 />
                               ))}
                               <label
-                                title="Custom highlight color"
+                                title="Custom highlight color (saves on update)"
                                 className="w-4 h-4 rounded-sm border border-stone-400 overflow-hidden cursor-pointer flex items-center justify-center"
                                 style={{ backgroundColor: editColor }}
                               >
@@ -1098,15 +1333,26 @@ export function InspectorPanel({
                                 />
                               </label>
                             </div>
-                            <label className="flex items-center gap-1 text-[11px] text-stone-700 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={editFillCell}
-                                onChange={(e) => setEditFillCell(e.target.checked)}
-                                className="accent-stone-900"
-                              />
-                              <span>Shade</span>
-                            </label>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] text-stone-500 truncate">
+                                {(() => {
+                                  const match = (config.eventPalette ?? EVENT_COLORS).find(
+                                    (c) => c.hex.toLowerCase() === editColor.toLowerCase()
+                                  );
+                                  if (!match) return `Custom ${editColor.toUpperCase()}`;
+                                  return match.category ? `${match.category} · ${match.label}` : match.label;
+                                })()}
+                              </span>
+                              <label className="flex items-center gap-1 text-[11px] text-stone-700 cursor-pointer shrink-0">
+                                <input
+                                  type="checkbox"
+                                  checked={editFillCell}
+                                  onChange={(e) => setEditFillCell(e.target.checked)}
+                                  className="accent-stone-900"
+                                />
+                                <span>Shade</span>
+                              </label>
+                            </div>
                           </div>
 
                           <div className="flex items-center justify-between gap-2 pt-0.5">
@@ -1201,6 +1447,20 @@ export function InspectorPanel({
                 </div>
               )}
             </section>
+
+            <hr className="border-stone-200" />
+
+            <ShadeCategoriesSection
+              eventPalette={config.eventPalette ?? EVENT_COLORS}
+              spanEvents={config.spanEvents}
+              showCategoryKey={config.showCategoryKey !== false}
+              onToggleShowCategoryKey={(val) =>
+                onChange((p) => ({ ...p, showCategoryKey: val }))
+              }
+              onUpdateCategory={onUpdateShadeCategory}
+              onAddCustomColor={onAddCustomShadeColor}
+              onDeleteCustomColor={onDeleteCustomShadeColor}
+            />
 
             {eventsSyncSlot && (
               <>

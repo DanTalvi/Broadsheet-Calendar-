@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { EVENT_COLORS } from '../data/presets';
-import { CalendarDayEvent, CalendarSpanEvent } from '../types/calendar';
+import { CalendarDayEvent, CalendarSpanEvent, EventColorItem } from '../types/calendar';
 import { getUSHolidaysForYear } from '../utils/calendarMath';
 
 interface DayEventEditorProps {
   dateKey: string;
   events: CalendarSpanEvent[];
+  eventPalette?: EventColorItem[];
   onClose: () => void;
   onAddEventRange: (startKey: string, endKey: string, event: Omit<CalendarDayEvent, 'id'>) => void;
   onUpdateEvent: (eventId: string, updates: Partial<Omit<CalendarSpanEvent, 'id'>>) => void;
@@ -16,6 +17,7 @@ interface DayEventEditorProps {
 export function DayEventEditor({
   dateKey,
   events,
+  eventPalette = EVENT_COLORS,
   onClose,
   onAddEventRange,
   onUpdateEvent,
@@ -133,15 +135,16 @@ export function DayEventEditor({
                       className="w-full px-1.5 py-1 text-[11px] tabular-nums bg-white border border-stone-300 rounded focus:outline-none focus:border-stone-900"
                     />
                   </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1">
-                      {EVENT_COLORS.map((c) => (
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-1">
+                      {eventPalette.map((c) => (
                         <button
                           key={c.id}
                           type="button"
                           onClick={() => setEditColor(c.hex)}
-                          aria-label={c.label}
-                          className={`w-4 h-4 rounded-sm cursor-pointer ${
+                          aria-label={c.category ? `${c.category} (${c.label})` : c.label}
+                          title={c.category ? `${c.category} (${c.label})` : c.label}
+                          className={`w-4 h-4 rounded-sm border border-stone-300/80 cursor-pointer ${
                             editColor.toLowerCase() === c.hex.toLowerCase()
                               ? 'ring-2 ring-offset-1 ring-stone-900'
                               : ''
@@ -150,7 +153,7 @@ export function DayEventEditor({
                         />
                       ))}
                       <label
-                        title="Custom color"
+                        title="Custom color (auto-saves on save)"
                         className="w-4 h-4 rounded-sm border border-stone-400 overflow-hidden cursor-pointer"
                         style={{ backgroundColor: editColor }}
                       >
@@ -169,7 +172,7 @@ export function DayEventEditor({
                         onChange={(e) => setEditFillCell(e.target.checked)}
                         className="accent-stone-900"
                       />
-                      <span>Shade</span>
+                      <span>Shade cells</span>
                     </label>
                   </div>
                   <div className="flex justify-end gap-1.5">
@@ -257,15 +260,16 @@ export function DayEventEditor({
             className="px-2 py-1 text-xs tabular-nums border border-stone-300 rounded-md focus:outline-none focus:border-stone-900"
           />
         </label>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            {EVENT_COLORS.map((c) => (
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {eventPalette.map((c) => (
               <button
                 key={c.id}
                 type="button"
                 onClick={() => setColor(c.hex)}
-                aria-label={c.label}
-                className={`w-4 h-4 rounded-sm cursor-pointer ${
+                aria-label={c.category ? `${c.category} (${c.label})` : c.label}
+                title={c.category ? `${c.category} (${c.label})` : c.label}
+                className={`w-4 h-4 rounded-sm border border-stone-300/80 cursor-pointer ${
                   color.toLowerCase() === c.hex.toLowerCase()
                     ? 'ring-2 ring-offset-1 ring-stone-900'
                     : ''
@@ -274,7 +278,7 @@ export function DayEventEditor({
               />
             ))}
             <label
-              title="Custom color"
+              title="Custom color (auto-saves on add)"
               className="w-4 h-4 rounded-sm border border-stone-400 overflow-hidden cursor-pointer"
               style={{ backgroundColor: color }}
             >
