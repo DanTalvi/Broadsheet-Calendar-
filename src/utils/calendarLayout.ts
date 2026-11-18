@@ -13,7 +13,7 @@ import {
   MONTH_NAMES_SHORT,
   WEEKDAY_NAMES_SHORT,
 } from './calendarMath';
-import { normalizeHex } from './eventPaletteStorage';
+import { normalizeHex, SHADE_CATEGORY_MAX_LENGTH } from './eventPaletteStorage';
 import { measureTextWidthPx, wrapTextToLines } from './textWrap';
 
 export interface ComputedCell {
@@ -279,7 +279,7 @@ export function computeCalendarLayout(config: CalendarConfig): ComputedCalendarL
       if (seenHex.has(hex)) continue;
       seenHex.add(hex);
       const entry = paletteByHex.get(hex);
-      const cat = entry?.category?.trim();
+      const cat = entry?.category?.trim().slice(0, SHADE_CATEGORY_MAX_LENGTH);
       if (cat) {
         const textWIn = measureTextWidthPx(cat, footFontSpec) / 72;
         rawCategoryKeys.push({

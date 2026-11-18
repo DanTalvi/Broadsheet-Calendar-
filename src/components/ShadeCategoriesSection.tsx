@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import { CalendarSpanEvent, EventColorItem } from '../types/calendar';
-import { normalizeHex } from '../utils/eventPaletteStorage';
+import { normalizeHex, SHADE_CATEGORY_MAX_LENGTH } from '../utils/eventPaletteStorage';
 
 interface ShadeCategoriesSectionProps {
   eventPalette: EventColorItem[];
@@ -106,13 +106,21 @@ export function ShadeCategoriesSection({
                   {count} {count === 1 ? 'event' : 'events'}
                 </span>
               </div>
-              <input
-                type="text"
-                value={item.category ?? ''}
-                onChange={(e) => onUpdateCategory(item.hex, e.target.value)}
-                placeholder="Category label for footer key (e.g. Travel)"
-                className="w-full px-2 py-1 text-xs bg-white border border-stone-300 rounded focus:outline-none focus:border-stone-900"
-              />
+              <div className="flex items-center justify-between gap-2">
+                <input
+                  type="text"
+                  maxLength={SHADE_CATEGORY_MAX_LENGTH}
+                  value={item.category ?? ''}
+                  onChange={(e) =>
+                    onUpdateCategory(item.hex, e.target.value.slice(0, SHADE_CATEGORY_MAX_LENGTH))
+                  }
+                  placeholder="Category label (e.g. School Break)"
+                  className="flex-1 min-w-0 px-2 py-1 text-xs bg-white border border-stone-300 rounded focus:outline-none focus:border-stone-900"
+                />
+                <span className="text-[10px] text-stone-400 tabular-nums shrink-0">
+                  {(item.category ?? '').length}/{SHADE_CATEGORY_MAX_LENGTH}
+                </span>
+              </div>
             </div>
           ))}
         </div>
@@ -152,9 +160,12 @@ export function ShadeCategoriesSection({
                 />
                 <input
                   type="text"
+                  maxLength={SHADE_CATEGORY_MAX_LENGTH}
                   value={customCategory}
-                  onChange={(e) => setCustomCategory(e.target.value)}
-                  placeholder="Optional category name"
+                  onChange={(e) =>
+                    setCustomCategory(e.target.value.slice(0, SHADE_CATEGORY_MAX_LENGTH))
+                  }
+                  placeholder="Optional category (max 25 chars)"
                   className="flex-1 min-w-0 px-2 py-1 text-xs bg-white border border-stone-300 rounded focus:outline-none focus:border-stone-900"
                 />
                 <button
@@ -177,8 +188,11 @@ export function ShadeCategoriesSection({
                   />
                   <input
                     type="text"
+                    maxLength={SHADE_CATEGORY_MAX_LENGTH}
                     value={sw.category ?? ''}
-                    onChange={(e) => onUpdateCategory(sw.hex, e.target.value)}
+                    onChange={(e) =>
+                      onUpdateCategory(sw.hex, e.target.value.slice(0, SHADE_CATEGORY_MAX_LENGTH))
+                    }
                     placeholder={sw.label}
                     className="flex-1 min-w-0 px-1.5 py-0.5 text-[11px] border border-transparent hover:border-stone-200 focus:border-stone-400 rounded focus:outline-none"
                   />

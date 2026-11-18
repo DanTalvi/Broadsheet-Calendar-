@@ -2,6 +2,7 @@ import { EVENT_COLORS } from '../data/presets';
 import { EventColorItem } from '../types/calendar';
 
 export const USER_EVENT_PALETTE_KEY = 'broadsheet_user_event_palette_v1';
+export const SHADE_CATEGORY_MAX_LENGTH = 25;
 
 export function normalizeHex(hex: string): string {
   const clean = hex.trim().toUpperCase();
@@ -32,16 +33,21 @@ export function mergeWithDefaultPalette(saved?: EventColorItem[] | null): EventC
       return {
         ...def,
         hex: norm,
-        category: match.category ?? def.category ?? '',
+        category: (match.category ?? def.category ?? '').slice(0, SHADE_CATEGORY_MAX_LENGTH),
       };
     }
-    return { ...def, hex: norm, category: def.category ?? '' };
+    return {
+      ...def,
+      hex: norm,
+      category: (def.category ?? '').slice(0, SHADE_CATEGORY_MAX_LENGTH),
+    };
   });
 
   // Append any user-created custom colors preserved from storage
   for (const custom of savedByHex.values()) {
     merged.push({
       ...custom,
+      category: (custom.category ?? '').slice(0, SHADE_CATEGORY_MAX_LENGTH),
       isCustom: true,
     });
   }
@@ -74,13 +80,17 @@ export function ensureColorInPalette(
   optionalCategory?: string
 ): { nextPalette: EventColorItem[]; added: boolean } {
   const norm = normalizeHex(hex);
+  const clampedCategory =
+    optionalCategory !== undefined
+      ? optionalCategory.slice(0, SHADE_CATEGORY_MAX_LENGTH)
+      : undefined;
   const existingIdx = palette.findIndex((c) => normalizeHex(c.hex) === norm);
   if (existingIdx >= 0) {
-    if (optionalCategory !== undefined && optionalCategory.trim() !== (palette[existingIdx].category ?? '')) {
+    if (clampedCategory !== undefined && clampedCategory !== (palette[existingIdx].category ?? '')) {
       const copy = [...palette];
       copy[existingIdx] = {
         ...copy[existingIdx],
-        category: optionalCategory.trim(),
+        category: clampedCategory,
       };
       return { nextPalette: copy, added: false };
     }
@@ -91,7 +101,7 @@ export function ensureColorInPalette(
     id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
     label: `Custom ${norm}`,
     hex: norm,
-    category: optionalCategory?.trim() ?? '',
+    category: clampedCategory ?? '',
     isCustom: true,
   };
   return {
